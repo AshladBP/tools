@@ -11,7 +11,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -56,17 +55,6 @@ func (pm *ProcessManager) StopAll() {
 	}
 }
 
-// killProcessGroup kills a process and all its children
-func killProcessGroup(pid int) {
-	// On Unix, kill the process group by using negative PID
-	if runtime.GOOS != "windows" {
-		syscall.Kill(-pid, syscall.SIGKILL)
-	} else {
-		// On Windows, use taskkill /T to kill tree
-		exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprint(pid)).Run()
-	}
-}
-
 // killProcessByPort kills any process listening on the specified port
 func killProcessByPort(port string) error {
 	if runtime.GOOS == "windows" {
@@ -77,13 +65,6 @@ func killProcessByPort(port string) error {
 	// macOS/Linux: use lsof to find and kill
 	cmd := exec.Command("sh", "-c", fmt.Sprintf("lsof -ti:%s | xargs kill -9 2>/dev/null", port))
 	return cmd.Run()
-}
-
-// setupProcessGroup configures cmd to run in its own process group
-func setupProcessGroup(cmd *exec.Cmd) {
-	if runtime.GOOS != "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
 }
 
 func checkCommand(name string, args ...string) (bool, string) {
