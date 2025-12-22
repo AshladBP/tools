@@ -4,27 +4,9 @@ A toolkit for analyzing game lookup tables (LUTs) with a Go backend and SvelteKi
 
 Powered by Stake Engine. Respect whole Stake Engine team ❤️
 
-## Quick Start (Recommended)
-
-**Download the Launcher** from [Releases](https://github.com/mnemoo/tools/releases) for your platform:
-
-- `mtools-launcher-darwin-arm64` - macOS Apple Silicon
-- `mtools-launcher-linux-amd64` - Linux x64
-- `mtools-launcher-linux-arm64` - Linux ARM64
-- `mtools-launcher-windows-amd64.exe` - Windows x64
-- `mtools-launcher-windows-arm64.exe` - Windows ARM64
-
-The Launcher will:
-1. Check and show missing dependencies
-2. Let you select the `index.json` file
-3. Start/stop backend and frontend with one click
-4. Open the app in your browser
-
 ## Prerequisites
 
-Before running the Launcher, install these dependencies:
-
-### Required
+**You must install these dependencies first** - they are required to run the backend and frontend:
 
 | Dependency | Version | Download |
 |------------|---------|----------|
@@ -32,10 +14,8 @@ Before running the Launcher, install these dependencies:
 | **Node.js** | 22+ | [nodejs.org](https://nodejs.org/) |
 | **pnpm** | latest | `npm install -g pnpm` |
 
-### Installation by OS
-
 <details>
-<summary><b>macOS</b></summary>
+<summary><b>macOS installation</b></summary>
 
 ```bash
 # Install Homebrew if not installed
@@ -48,7 +28,7 @@ npm install -g pnpm
 </details>
 
 <details>
-<summary><b>Windows</b></summary>
+<summary><b>Windows installation</b></summary>
 
 1. Download and install [Go](https://go.dev/dl/)
 2. Download and install [Node.js](https://nodejs.org/)
@@ -56,7 +36,7 @@ npm install -g pnpm
 </details>
 
 <details>
-<summary><b>Linux (Ubuntu/Debian)</b></summary>
+<summary><b>Linux (Ubuntu/Debian) installation</b></summary>
 
 ```bash
 # Install Go
@@ -73,12 +53,46 @@ npm install -g pnpm
 
 ---
 
-## Manual Setup (Advanced)
+## Quick Start
 
-> **Note:** Running components separately is not recommended. Use the Launcher instead.
+### Option 1: Use the Launcher (Recommended)
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/mnemoo/tools.git
+   cd tools
+   ```
+
+2. Run the launcher:
+   ```bash
+   cd launcher
+   go run .
+   ```
+
+The Launcher GUI will:
+- Check and show missing dependencies
+- Let you select the `index.json` file
+- Start/stop backend and frontend with one click
+- Open the app in your browser
+
+### Option 2: Download Pre-built Launcher
+
+If you already have Go, Node.js, and pnpm installed, download the launcher binary from [Releases](https://github.com/mnemoo/tools/releases):
+
+- `mtools-launcher-darwin-arm64` - macOS Apple Silicon
+- `mtools-launcher-linux-amd64` - Linux x64
+- `mtools-launcher-linux-arm64` - Linux ARM64
+- `mtools-launcher-windows-amd64.exe` - Windows x64
+- `mtools-launcher-windows-arm64.exe` - Windows ARM64
+
+> **Note:** The launcher is just a GUI - it still requires Go and Node.js to compile and run the backend/frontend. You also need to clone/download the repository and place the launcher binary in the root folder.
+
+---
+
+## Manual Setup
 
 <details>
-<summary>Show manual instructions</summary>
+<summary>Run backend and frontend separately</summary>
 
 ### Start Backend
 
