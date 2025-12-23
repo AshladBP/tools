@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -20,6 +21,93 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"github.com/ncruces/zenity"
 )
+
+// LogBuffer handles buffered, rate-limited log output
+type LogBuffer struct {
+	mu           sync.Mutex
+	lines        []string
+	maxLines     int
+	pending      []string
+	updateFunc   func(string)
+	ticker       *time.Ticker
+	stopChan     chan struct{}
+}
+
+func NewLogBuffer(maxLines int, updateFunc func(string)) *LogBuffer {
+	lb := &LogBuffer{
+		lines:      make([]string, 0, maxLines),
+		maxLines:   maxLines,
+		pending:    make([]string, 0, 100),
+		updateFunc: updateFunc,
+		stopChan:   make(chan struct{}),
+	}
+
+	// Start background flusher - update UI max 10 times per second
+	lb.ticker = time.NewTicker(100 * time.Millisecond)
+	go lb.flushLoop()
+
+	return lb
+}
+
+func (lb *LogBuffer) flushLoop() {
+	for {
+		select {
+		case <-lb.ticker.C:
+			lb.flush()
+		case <-lb.stopChan:
+			lb.ticker.Stop()
+			return
+		}
+	}
+}
+
+func (lb *LogBuffer) flush() {
+	lb.mu.Lock()
+	if len(lb.pending) == 0 {
+		lb.mu.Unlock()
+		return
+	}
+
+	// Add pending lines to buffer
+	lb.lines = append(lb.lines, lb.pending...)
+	lb.pending = lb.pending[:0]
+
+	// Trim to max lines
+	if len(lb.lines) > lb.maxLines {
+		lb.lines = lb.lines[len(lb.lines)-lb.maxLines:]
+	}
+
+	// Build output string
+	output := strings.Join(lb.lines, "\n")
+	lb.mu.Unlock()
+
+	// Update UI (must be called from main thread context, but Fyne handles this)
+	lb.updateFunc(output)
+}
+
+func (lb *LogBuffer) Append(msg string) {
+	lb.mu.Lock()
+	lb.pending = append(lb.pending, msg)
+	lb.mu.Unlock()
+}
+
+func (lb *LogBuffer) Clear() {
+	lb.mu.Lock()
+	lb.lines = lb.lines[:0]
+	lb.pending = lb.pending[:0]
+	lb.mu.Unlock()
+	lb.updateFunc("")
+}
+
+func (lb *LogBuffer) GetText() string {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	return strings.Join(lb.lines, "\n")
+}
+
+func (lb *LogBuffer) Stop() {
+	close(lb.stopChan)
+}
 
 // Default ports
 const (
@@ -169,10 +257,15 @@ func main() {
 	logOutput.Wrapping = fyne.TextWrapWord
 	logOutput.TextStyle = fyne.TextStyle{Monospace: true}
 
-	appendLog := func(msg string) {
-		logOutput.SetText(logOutput.Text + msg + "\n")
+	// Create buffered logger - max 500 lines, updates UI max 10 times/sec
+	logBuffer := NewLogBuffer(500, func(text string) {
+		logOutput.SetText(text)
 		// Auto-scroll to bottom
-		logOutput.CursorRow = len(strings.Split(logOutput.Text, "\n")) - 1
+		logOutput.CursorRow = len(strings.Split(text, "\n")) - 1
+	})
+
+	appendLog := func(msg string) {
+		logBuffer.Append(msg)
 	}
 
 	// Dependency checks
@@ -553,12 +646,12 @@ func main() {
 		logWindow.Resize(fyne.NewSize(800, 600))
 
 		fullLogText := widget.NewMultiLineEntry()
-		fullLogText.SetText(logOutput.Text)
+		fullLogText.SetText(logBuffer.GetText())
 		fullLogText.Wrapping = fyne.TextWrapWord
 		fullLogText.TextStyle = fyne.TextStyle{Monospace: true}
 
 		clearBtn := widget.NewButtonWithIcon("Clear Log", theme.DeleteIcon(), func() {
-			logOutput.SetText("")
+			logBuffer.Clear()
 			fullLogText.SetText("")
 		})
 
@@ -591,6 +684,7 @@ func main() {
 
 	// Cleanup on close
 	w.SetOnClosed(func() {
+		logBuffer.Stop()
 		pm.StopAll()
 	})
 

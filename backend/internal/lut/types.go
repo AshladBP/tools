@@ -150,7 +150,7 @@ func (a *Analyzer) Analyze(lut *stakergs.LookupTable) *Statistics {
 	stats.Distribution = a.BuildDistribution(lut, totalWeight)
 
 	// Payout buckets for histogram
-	stats.PayoutBuckets = a.buildPayoutBuckets(lut, totalWeight)
+	stats.PayoutBuckets = a.BuildPayoutBuckets(lut, totalWeight)
 
 	// Top payouts
 	stats.TopPayouts = a.getTopPayouts(lut, totalWeight, 10)
@@ -271,7 +271,8 @@ func generateBucketBoundaries(maxPayout float64) []float64 {
 	return boundaries
 }
 
-func (a *Analyzer) buildPayoutBuckets(lut *stakergs.LookupTable, totalWeight uint64) []PayoutBucket {
+// BuildPayoutBuckets creates payout range buckets for a LUT.
+func (a *Analyzer) BuildPayoutBuckets(lut *stakergs.LookupTable, totalWeight uint64) []PayoutBucket {
 	maxPayout := float64(lut.MaxPayout()) / 100.0
 	if maxPayout == 0 {
 		return nil

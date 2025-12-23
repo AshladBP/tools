@@ -15,25 +15,27 @@ import (
 
 // Loader handles loading and caching of LUT index files.
 type Loader struct {
-	indexPath    string
-	baseDir      string
-	index        *stakergs.GameIndex
-	tables       map[string]*stakergs.LookupTable
-	analyzer     *Analyzer
-	eventsLoader *EventsLoader
-	simulator    *Simulator
+	indexPath         string
+	baseDir           string
+	index             *stakergs.GameIndex
+	tables            map[string]*stakergs.LookupTable
+	analyzer          *Analyzer
+	eventsLoader      *EventsLoader
+	simulator         *Simulator
+	distributionCache *DistributionCache
 }
 
 // NewLoader creates a new LUT loader for the given index file path.
 func NewLoader(indexPath string) *Loader {
 	baseDir := filepath.Dir(indexPath)
 	return &Loader{
-		indexPath:    indexPath,
-		baseDir:      baseDir,
-		tables:       make(map[string]*stakergs.LookupTable),
-		analyzer:     NewAnalyzer(),
-		eventsLoader: NewEventsLoader(baseDir),
-		simulator:    NewSimulator(),
+		indexPath:         indexPath,
+		baseDir:           baseDir,
+		tables:            make(map[string]*stakergs.LookupTable),
+		analyzer:          NewAnalyzer(),
+		eventsLoader:      NewEventsLoader(baseDir),
+		simulator:         NewSimulator(),
+		distributionCache: NewDistributionCache(),
 	}
 }
 
@@ -179,6 +181,11 @@ func (l *Loader) Analyzer() *Analyzer {
 	return l.analyzer
 }
 
+// DistributionCache returns the distribution cache.
+func (l *Loader) DistributionCache() *DistributionCache {
+	return l.distributionCache
+}
+
 // ModeSummary contains basic info about a mode.
 type ModeSummary struct {
 	Mode      string  `json:"mode"`
@@ -283,6 +290,9 @@ func (l *Loader) Reload() error {
 	// Clear events cache first
 	l.eventsLoader.ClearAll()
 
+	// Clear distribution cache
+	l.distributionCache.InvalidateAll()
+
 	// Clear tables
 	l.tables = make(map[string]*stakergs.LookupTable)
 
@@ -352,6 +362,9 @@ func (l *Loader) SaveWeights(mode string, weights []uint64) error {
 	for i := range table.Outcomes {
 		table.Outcomes[i].Weight = weights[i]
 	}
+
+	// Invalidate distribution cache for this mode
+	l.distributionCache.Invalidate(mode)
 
 	return nil
 }

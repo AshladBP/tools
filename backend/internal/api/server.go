@@ -308,6 +308,13 @@ func (s *Server) handleModeStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stats := s.loader.Analyzer().Analyze(table)
+
+	// Start background generation of distribution cache for faster bucket queries
+	cache := s.loader.DistributionCache()
+	if cache.Get(mode) == nil && !cache.IsGenerating(mode) {
+		cache.GenerateAsync(mode, table, stats.PayoutBuckets)
+	}
+
 	common.WriteSuccess(w, stats)
 }
 
@@ -366,16 +373,35 @@ func (s *Server) handleModeBucketDistribution(w http.ResponseWriter, r *http.Req
 		fmt.Sscanf(v, "%d", &limit)
 	}
 
+	// Try to get from cache first
+	cache := s.loader.DistributionCache()
+	if result := cache.GetBucketItems(mode, rangeStart, rangeEnd, offset, limit); result != nil {
+		common.WriteSuccess(w, result)
+		return
+	}
+
+	// Not in cache - generate synchronously for first request, then cache
+	// Get buckets to build the cache
+	totalWeight := table.TotalWeight()
+	buckets := s.loader.Analyzer().BuildPayoutBuckets(table, totalWeight)
+
+	// Generate cache (synchronously for first request)
+	cache.Generate(mode, table, buckets)
+
+	// Now get from cache
+	if result := cache.GetBucketItems(mode, rangeStart, rangeEnd, offset, limit); result != nil {
+		common.WriteSuccess(w, result)
+		return
+	}
+
+	// Fallback: compute directly (shouldn't happen)
 	req := lut.BucketDistributionRequest{
 		RangeStart: rangeStart,
 		RangeEnd:   rangeEnd,
 		Offset:     offset,
 		Limit:      limit,
 	}
-
-	totalWeight := table.TotalWeight()
 	result := s.loader.Analyzer().GetBucketDistribution(table, totalWeight, req)
-
 	common.WriteSuccess(w, result)
 }
 
