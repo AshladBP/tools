@@ -25,28 +25,62 @@
 
 	// Group distribution items by bucket and sort buckets by range_end descending (biggest first)
 	let groupedByBucket = $derived(() => {
+		if (buckets.length === 0 || distribution.length === 0) {
+			return [];
+		}
+
+		// Pre-calculate max range_end once
+		const maxRangeEnd = Math.max(...buckets.map(b => b.range_end));
+
 		// Sort buckets by range_end descending (wincap first)
 		const sortedBuckets = [...buckets].sort((a, b) => b.range_end - a.range_end);
 
+		// Create a map for O(1) bucket lookup
+		const bucketMap = new Map<string, { bucket: PayoutBucket; items: DistributionItem[]; key: string }>();
+
+		for (const bucket of sortedBuckets) {
+			const key = `${bucket.range_start}-${bucket.range_end}`;
+			bucketMap.set(key, { bucket, items: [], key });
+		}
+
+		// Single pass through distribution - O(n) instead of O(buckets * n)
+		for (const item of distribution) {
+			// Find the matching bucket
+			for (const bucket of sortedBuckets) {
+				const key = `${bucket.range_start}-${bucket.range_end}`;
+				let matches = false;
+
+				// Special case for 0x (loss) bucket
+				if (bucket.range_start === 0 && bucket.range_end === 0) {
+					matches = item.payout === 0;
+				}
+				// For the highest bucket, include items >= range_start
+				else if (bucket.range_end >= maxRangeEnd * 0.99) {
+					matches = item.payout >= bucket.range_start;
+				}
+				// Normal range: range_start <= payout < range_end
+				else {
+					matches = item.payout >= bucket.range_start && item.payout < bucket.range_end;
+				}
+
+				if (matches) {
+					bucketMap.get(key)!.items.push(item);
+					break; // Item belongs to only one bucket
+				}
+			}
+		}
+
+		// Convert to array, filter empty, and sort items within each bucket
 		const groups: { bucket: PayoutBucket; items: DistributionItem[]; key: string }[] = [];
 
 		for (const bucket of sortedBuckets) {
 			const key = `${bucket.range_start}-${bucket.range_end}`;
-			const items = distribution.filter(item => {
-				// Special case for 0x (loss) bucket
-				if (bucket.range_start === 0 && bucket.range_end === 0) {
-					return item.payout === 0;
-				}
-				// For the highest bucket, include items >= range_start
-				if (bucket.range_end >= Math.max(...buckets.map(b => b.range_end)) * 0.99) {
-					return item.payout >= bucket.range_start;
-				}
-				// Normal range: range_start <= payout < range_end
-				return item.payout >= bucket.range_start && item.payout < bucket.range_end;
-			}).sort((a, b) => b.payout - a.payout); // Sort items by payout descending within bucket
+			const group = bucketMap.get(key)!;
 
-			if (items.length > 0) {
-				groups.push({ bucket, items, key });
+			if (group.items.length > 0) {
+				// Sort items by payout descending within bucket
+				group.items.sort((a, b) => b.payout - a.payout);
+				groups.push(group);
 			}
 		}
 
