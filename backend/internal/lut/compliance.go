@@ -99,8 +99,7 @@ func (c *ComplianceChecker) CheckMode(lut *stakergs.LookupTable) *ComplianceResu
 	// Calculate additional summary values
 	result.Summary.UniquePayouts = c.countUniquePayouts(lut)
 	result.Summary.MaxPayoutHitRate = c.calculateMaxPayoutHitRate(lut, totalWeight)
-	mostFreq, _ = c.calculateMostFrequentProbability(lut, totalWeight)
-	result.Summary.MostFrequentProb = mostFreq
+	result.Summary.MostFrequentProb, _ = c.calculateMostFrequentProbability(lut, totalWeight)
 
 	// Run all checks
 	result.Checks = append(result.Checks, c.checkRTPRange(stats))
