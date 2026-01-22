@@ -101,25 +101,23 @@ func CalcBalanceCurve(players []*Player, spinsPerSession int) []BalanceCurvePoin
 	}
 
 	points := make([]BalanceCurvePoint, 0, 32)
-	balances := make([]float64, len(players))
 
 	for spin := 0; spin <= spinsPerSession; spin += sampleInterval {
-		// Collect balances at this spin
-		validCount := 0
-		for i, p := range players {
+		// Collect balances at this spin - build slice of valid balances only
+		balances := make([]float64, 0, len(players))
+		for _, p := range players {
 			if p.BalanceHistory != nil && spin < len(p.BalanceHistory) {
-				balances[i] = p.BalanceHistory[spin]
-				validCount++
+				balances = append(balances, p.BalanceHistory[spin])
 			}
 		}
 
-		if validCount == 0 {
+		if len(balances) == 0 {
 			continue
 		}
 
 		// Calculate stats
-		sorted := make([]float64, validCount)
-		copy(sorted, balances[:validCount])
+		sorted := make([]float64, len(balances))
+		copy(sorted, balances)
 		sort.Float64s(sorted)
 
 		var sum float64
@@ -129,7 +127,7 @@ func CalcBalanceCurve(players []*Player, spinsPerSession int) []BalanceCurvePoin
 
 		points = append(points, BalanceCurvePoint{
 			Spin:   spin,
-			Avg:    round2(sum / float64(validCount)),
+			Avg:    round2(sum / float64(len(balances))),
 			Median: round2(percentile(sorted, 50)),
 			P5:     round2(percentile(sorted, 5)),
 			P95:    round2(percentile(sorted, 95)),
@@ -139,17 +137,16 @@ func CalcBalanceCurve(players []*Player, spinsPerSession int) []BalanceCurvePoin
 	// Always include the final spin if not already included
 	lastSpin := spinsPerSession
 	if len(points) > 0 && points[len(points)-1].Spin != lastSpin {
-		validCount := 0
-		for i, p := range players {
+		balances := make([]float64, 0, len(players))
+		for _, p := range players {
 			if p.BalanceHistory != nil && lastSpin < len(p.BalanceHistory) {
-				balances[i] = p.BalanceHistory[lastSpin]
-				validCount++
+				balances = append(balances, p.BalanceHistory[lastSpin])
 			}
 		}
 
-		if validCount > 0 {
-			sorted := make([]float64, validCount)
-			copy(sorted, balances[:validCount])
+		if len(balances) > 0 {
+			sorted := make([]float64, len(balances))
+			copy(sorted, balances)
 			sort.Float64s(sorted)
 
 			var sum float64
@@ -159,7 +156,7 @@ func CalcBalanceCurve(players []*Player, spinsPerSession int) []BalanceCurvePoin
 
 			points = append(points, BalanceCurvePoint{
 				Spin:   lastSpin,
-				Avg:    round2(sum / float64(validCount)),
+				Avg:    round2(sum / float64(len(balances))),
 				Median: round2(percentile(sorted, 50)),
 				P5:     round2(percentile(sorted, 5)),
 				P95:    round2(percentile(sorted, 95)),

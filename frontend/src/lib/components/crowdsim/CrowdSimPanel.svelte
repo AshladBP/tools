@@ -149,12 +149,25 @@
 
 		<!-- Bonus Mode Info Banner -->
 		{#if result.mode_info?.is_bonus_mode}
+			{@const brTheoretical = result.mode_info.breakeven_rate}
+			{@const brSimulated = result.mode_info.simulated_breakeven_rate}
+			{@const brColor = brSimulated >= 0.5 ? 'emerald' : brSimulated >= 0.3 ? 'gold' : brSimulated >= 0.15 ? 'orange' : 'coral'}
 			<div class="px-4 py-3 rounded-xl bg-violet-500/10 border border-violet-500/30 flex items-start gap-3">
 				<svg class="w-5 h-5 text-violet-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 					<path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
 				</svg>
-				<div class="text-sm text-violet-200/90">
-					<strong class="text-violet-400">Bonus Mode (Cost: {result.mode_info.cost}x)</strong>
+				<div class="text-sm text-violet-200/90 flex-1">
+					<div class="flex items-center justify-between">
+						<strong class="text-violet-400">Bonus Mode (Cost: {result.mode_info.cost}x)</strong>
+						<div class="flex items-center gap-2">
+							<span class="px-2 py-0.5 rounded text-xs font-mono bg-[var(--color-slate)] text-[var(--color-mist)]">
+								Theo: {(brTheoretical * 100).toFixed(1)}%
+							</span>
+							<span class="px-2 py-0.5 rounded text-xs font-mono font-bold bg-{brColor}-500/20 text-{brColor}-400 border border-{brColor}-500/30">
+								Sim: {(brSimulated * 100).toFixed(1)}%
+							</span>
+						</div>
+					</div>
 					<p class="mt-1 text-xs text-violet-200/70">
 						Payouts are normalized by cost. Big win threshold of {config.big_win_threshold}x = {Math.round(config.big_win_threshold * result.mode_info.cost)}x absolute.
 					</p>
@@ -193,16 +206,29 @@
 					<p class="text-sm font-mono text-[var(--color-mist)] mt-1">Score: {result.composite_score.toFixed(3)}</p>
 				</div>
 
-				<!-- Duration -->
-				<div class="text-center lg:text-left">
-					<p class="text-xs font-mono text-[var(--color-mist)] tracking-widest mb-1">SIMULATION TIME</p>
-					<p class="font-display text-5xl text-[var(--color-violet)]">
-						{result.duration_ms < 1000 ? result.duration_ms : (result.duration_ms / 1000).toFixed(2)}<span class="text-xl">{result.duration_ms < 1000 ? 'ms' : 's'}</span>
-					</p>
-					<p class="text-sm font-mono text-[var(--color-mist)] mt-1">
-						{(result.config.player_count * result.config.spins_per_session).toLocaleString()} total spins
-					</p>
-				</div>
+				<!-- Breakeven Rate (for bonus modes) or Duration -->
+				{#if result.mode_info?.is_bonus_mode}
+					{@const br = result.mode_info.simulated_breakeven_rate}
+					{@const brDev = result.mode_info.breakeven_rate_deviation}
+					{@const brColorClass = br >= 0.5 ? 'text-[var(--color-emerald)]' : br >= 0.3 ? 'text-[var(--color-gold)]' : br >= 0.15 ? 'text-orange-400' : 'text-[var(--color-coral)]'}
+					<div class="text-center lg:text-left">
+						<p class="text-xs font-mono text-[var(--color-mist)] tracking-widest mb-1">BREAKEVEN RATE (SIM)</p>
+						<p class="font-display text-5xl {brColorClass}">{(br * 100).toFixed(1)}<span class="text-xl">%</span></p>
+						<p class="text-sm font-mono mt-1 {Math.abs(brDev) <= 0.005 ? 'text-[var(--color-emerald)]' : Math.abs(brDev) <= 0.01 ? 'text-[var(--color-gold)]' : 'text-[var(--color-coral)]'}">
+							{brDev >= 0 ? '+' : ''}{(brDev * 100).toFixed(2)}% vs theoretical
+						</p>
+					</div>
+				{:else}
+					<div class="text-center lg:text-left">
+						<p class="text-xs font-mono text-[var(--color-mist)] tracking-widest mb-1">SIMULATION TIME</p>
+						<p class="font-display text-5xl text-[var(--color-violet)]">
+							{result.duration_ms < 1000 ? result.duration_ms : (result.duration_ms / 1000).toFixed(2)}<span class="text-xl">{result.duration_ms < 1000 ? 'ms' : 's'}</span>
+						</p>
+						<p class="text-sm font-mono text-[var(--color-mist)] mt-1">
+							{(result.config.player_count * result.config.spins_per_session).toLocaleString()} total spins
+						</p>
+					</div>
+				{/if}
 			</div>
 		</div>
 

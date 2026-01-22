@@ -17,6 +17,7 @@ import (
 type Loader struct {
 	indexPath         string
 	baseDir           string
+	libraryDir        string // Root library folder (parent of publish_files)
 	index             *stakergs.GameIndex
 	tables            map[string]*stakergs.LookupTable
 	analyzer          *Analyzer
@@ -37,6 +38,29 @@ func NewLoader(indexPath string) *Loader {
 		simulator:         NewSimulator(),
 		distributionCache: NewDistributionCache(),
 	}
+}
+
+// NewLoaderFromLibrary creates a new LUT loader for the given library folder path.
+// The index.json is expected at library/publish_files/index.json
+func NewLoaderFromLibrary(libraryPath string) *Loader {
+	publishFilesDir := filepath.Join(libraryPath, "publish_files")
+	indexPath := filepath.Join(publishFilesDir, "index.json")
+	return &Loader{
+		indexPath:         indexPath,
+		baseDir:           publishFilesDir,
+		libraryDir:        libraryPath,
+		tables:            make(map[string]*stakergs.LookupTable),
+		analyzer:          NewAnalyzer(),
+		eventsLoader:      NewEventsLoader(publishFilesDir),
+		simulator:         NewSimulator(),
+		distributionCache: NewDistributionCache(),
+	}
+}
+
+// LibraryDir returns the root library folder path (parent of publish_files).
+// Returns empty string if loader was created with NewLoader (not NewLoaderFromLibrary).
+func (l *Loader) LibraryDir() string {
+	return l.libraryDir
 }
 
 // Simulator returns the LUT simulator.
@@ -311,6 +335,40 @@ func (l *Loader) Reload() error {
 
 	// Reload index and tables
 	return l.Load()
+}
+
+// ReloadModeTable reloads just the lookup table for a specific mode from disk.
+// This updates the in-memory table and invalidates the distribution cache for that mode.
+func (l *Loader) ReloadModeTable(modeName string) error {
+	config, err := l.GetModeConfig(modeName)
+	if err != nil {
+		return err
+	}
+
+	table, err := l.loadCSV(*config)
+	if err != nil {
+		return fmt.Errorf("failed to reload LUT for mode %q: %w", modeName, err)
+	}
+
+	l.tables[modeName] = table
+	l.distributionCache.Invalidate(modeName)
+
+	return nil
+}
+
+// GetCSVFiles returns a map of CSV weight filenames to mode names.
+// Example: {"lookUpTable_base_0.csv": "base", "lookUpTable_bonus_0.csv": "bonus"}
+func (l *Loader) GetCSVFiles() map[string]string {
+	if l.index == nil {
+		return nil
+	}
+	csvFiles := make(map[string]string)
+	for _, mode := range l.index.Modes {
+		if mode.Weights != "" {
+			csvFiles[mode.Weights] = mode.Name
+		}
+	}
+	return csvFiles
 }
 
 // SaveWeights saves new weights for a specific mode to the CSV file.

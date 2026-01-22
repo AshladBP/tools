@@ -9,10 +9,12 @@ import (
 
 	"lutexplorer/internal/bgloader"
 	"lutexplorer/internal/common"
+	"lutexplorer/internal/convexopt"
 	"lutexplorer/internal/crowdsim"
 	"lutexplorer/internal/lgs"
 	"lutexplorer/internal/lut"
 	"lutexplorer/internal/optimizer"
+	"lutexplorer/internal/watcher"
 	"lutexplorer/internal/ws"
 
 	"github.com/rs/cors"
@@ -21,20 +23,22 @@ import (
 
 // Server is the HTTP API server.
 type Server struct {
-	loader            *lut.Loader
-	addr              string
-	lgsHandlers       *lgs.Handlers
-	lgsSessions       *lgs.SessionManager
-	crowdsimHandlers  *crowdsim.Handlers
-	optimizerHandlers *optimizer.Handlers
-	wsHub             *ws.Hub
-	bgLoader          *bgloader.BackgroundLoader
+	loader             *lut.Loader
+	addr               string
+	lgsHandlers        *lgs.Handlers
+	lgsSessions        *lgs.SessionManager
+	crowdsimHandlers   *crowdsim.Handlers
+	optimizerHandlers  *optimizer.Handlers
+	convexoptHandlers  *convexopt.Handlers
+	wsHub              *ws.Hub
+	bgLoader           *bgloader.BackgroundLoader
+	csvWatcher         *watcher.FileWatcher
 }
 
 // NewServer creates a new API server.
-func NewServer(loader *lut.Loader, addr string, hub *ws.Hub) *Server {
+func NewServer(loader *lut.Loader, addr string, hub *ws.Hub, convexURL string) *Server {
 	sessions := lgs.NewSessionManager()
-	return &Server{
+	s := &Server{
 		loader:            loader,
 		addr:              addr,
 		lgsSessions:       sessions,
@@ -43,11 +47,23 @@ func NewServer(loader *lut.Loader, addr string, hub *ws.Hub) *Server {
 		optimizerHandlers: optimizer.NewHandlers(loader, hub),
 		wsHub:             hub,
 	}
+
+	// Initialize convex optimizer handlers if URL is provided
+	if convexURL != "" {
+		s.convexoptHandlers = convexopt.NewHandlers(loader, hub, convexURL)
+	}
+
+	return s
 }
 
 // SetBackgroundLoader sets the background loader for the server.
 func (s *Server) SetBackgroundLoader(bl *bgloader.BackgroundLoader) {
 	s.bgLoader = bl
+}
+
+// SetCSVWatcher sets the CSV watcher for the server.
+func (s *Server) SetCSVWatcher(w *watcher.FileWatcher) {
+	s.csvWatcher = w
 }
 
 // Hub returns the WebSocket hub.
@@ -93,6 +109,11 @@ func (s *Server) Start() error {
 	// Optimizer API
 	s.optimizerHandlers.RegisterRoutes(mux)
 
+	// Convex Optimizer API (if enabled)
+	if s.convexoptHandlers != nil {
+		s.convexoptHandlers.RegisterRoutes(mux)
+	}
+
 	// LGS (Local Game Server) - RGS-compatible endpoints
 	// Wallet endpoints
 	mux.HandleFunc("POST /wallet/authenticate", s.lgsHandlers.Authenticate)
@@ -132,6 +153,11 @@ func (s *Server) Start() error {
 	mux.HandleFunc("DELETE /api/loader/boost", s.handleLoaderUnboost)
 	mux.HandleFunc("GET /api/loader/priority", s.handleLoaderPriority)
 	mux.HandleFunc("POST /api/reload", s.handleReload)
+
+	// CSV Watcher API
+	mux.HandleFunc("GET /api/watcher/status", s.handleWatcherStatus)
+	mux.HandleFunc("POST /api/watcher/enable", s.handleWatcherEnable)
+	mux.HandleFunc("DELETE /api/watcher/enable", s.handleWatcherDisable)
 
 	// CORS middleware
 	c := cors.New(cors.Options{
@@ -188,6 +214,11 @@ func (s *Server) GetHandler() http.Handler {
 	// Optimizer API
 	s.optimizerHandlers.RegisterRoutes(mux)
 
+	// Convex Optimizer API (if enabled)
+	if s.convexoptHandlers != nil {
+		s.convexoptHandlers.RegisterRoutes(mux)
+	}
+
 	// LGS (Local Game Server) - RGS-compatible endpoints
 	mux.HandleFunc("POST /wallet/authenticate", s.lgsHandlers.Authenticate)
 	mux.HandleFunc("POST /wallet/play", s.lgsHandlers.Play)
@@ -226,6 +257,11 @@ func (s *Server) GetHandler() http.Handler {
 	mux.HandleFunc("DELETE /api/loader/boost", s.handleLoaderUnboost)
 	mux.HandleFunc("GET /api/loader/priority", s.handleLoaderPriority)
 	mux.HandleFunc("POST /api/reload", s.handleReload)
+
+	// CSV Watcher API
+	mux.HandleFunc("GET /api/watcher/status", s.handleWatcherStatus)
+	mux.HandleFunc("POST /api/watcher/enable", s.handleWatcherEnable)
+	mux.HandleFunc("DELETE /api/watcher/enable", s.handleWatcherDisable)
 
 	// CORS middleware
 	c := cors.New(cors.Options{
@@ -454,13 +490,16 @@ type CompareResponse struct {
 
 // CompareItem contains comparison data for a single mode.
 type CompareItem struct {
-	Mode         string  `json:"mode"`
-	RTP          float64 `json:"rtp"`
-	HitRate      float64 `json:"hit_rate"`
-	MaxPayout    float64 `json:"max_payout"`
-	Volatility   float64 `json:"volatility"`
-	MeanPayout   float64 `json:"mean_payout"`
-	MedianPayout float64 `json:"median_payout"`
+	Mode              string  `json:"mode"`
+	Cost              float64 `json:"cost"`
+	RTP               float64 `json:"rtp"`
+	HitRate           float64 `json:"hit_rate"`
+	MaxPayout         float64 `json:"max_payout"`
+	Volatility        float64 `json:"volatility"`
+	MeanPayout        float64 `json:"mean_payout"`
+	MedianPayout      float64 `json:"median_payout"`
+	BreakevenRate     float64 `json:"breakeven_rate"`
+	CostAdjVolatility float64 `json:"cost_adj_volatility"`
 }
 
 func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
@@ -485,13 +524,16 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 
 		stats := s.loader.Analyzer().Analyze(table)
 		items = append(items, CompareItem{
-			Mode:         modeName,
-			RTP:          stats.RTP,
-			HitRate:      stats.HitRate,
-			MaxPayout:    stats.MaxPayout,
-			Volatility:   stats.Volatility,
-			MeanPayout:   stats.MeanPayout,
-			MedianPayout: stats.MedianPayout,
+			Mode:              modeName,
+			Cost:              stats.Cost,
+			RTP:               stats.RTP,
+			HitRate:           stats.HitRate,
+			MaxPayout:         stats.MaxPayout,
+			Volatility:        stats.Volatility,
+			MeanPayout:        stats.MeanPayout,
+			MedianPayout:      stats.MedianPayout,
+			BreakevenRate:     stats.BreakevenRate,
+			CostAdjVolatility: stats.CostAdjVolatility,
 		})
 	}
 
@@ -847,4 +889,73 @@ func (s *Server) handleAllCompliance(w http.ResponseWriter, r *http.Request) {
 	result := checker.CheckAllModes(tables)
 
 	common.WriteSuccess(w, result)
+}
+
+// WatcherStatus represents the status of the CSV watcher.
+type WatcherStatus struct {
+	Available bool              `json:"available"`
+	Enabled   bool              `json:"enabled"`
+	Files     map[string]string `json:"files,omitempty"`
+}
+
+// handleWatcherStatus returns the current status of the CSV watcher.
+func (s *Server) handleWatcherStatus(w http.ResponseWriter, r *http.Request) {
+	status := WatcherStatus{
+		Available: s.csvWatcher != nil,
+		Enabled:   false,
+		Files:     nil,
+	}
+
+	if s.csvWatcher != nil {
+		status.Enabled = s.csvWatcher.Enabled()
+		status.Files = s.csvWatcher.GetFiles()
+	}
+
+	common.WriteSuccess(w, status)
+}
+
+// handleWatcherEnable enables the CSV watcher.
+func (s *Server) handleWatcherEnable(w http.ResponseWriter, r *http.Request) {
+	if s.csvWatcher == nil {
+		common.WriteError(w, http.StatusServiceUnavailable, "watcher not available (start server with --watch flag)")
+		return
+	}
+
+	s.csvWatcher.SetEnabled(true)
+
+	// Broadcast to WebSocket clients
+	s.wsHub.Broadcast(ws.Message{
+		Type: ws.MsgWatcherEnabled,
+		Payload: map[string]interface{}{
+			"enabled": true,
+		},
+	})
+
+	common.WriteSuccess(w, map[string]interface{}{
+		"message": "Watcher enabled",
+		"enabled": true,
+	})
+}
+
+// handleWatcherDisable disables the CSV watcher.
+func (s *Server) handleWatcherDisable(w http.ResponseWriter, r *http.Request) {
+	if s.csvWatcher == nil {
+		common.WriteError(w, http.StatusServiceUnavailable, "watcher not available (start server with --watch flag)")
+		return
+	}
+
+	s.csvWatcher.SetEnabled(false)
+
+	// Broadcast to WebSocket clients
+	s.wsHub.Broadcast(ws.Message{
+		Type: ws.MsgWatcherDisabled,
+		Payload: map[string]interface{}{
+			"enabled": false,
+		},
+	})
+
+	common.WriteSuccess(w, map[string]interface{}{
+		"message": "Watcher disabled",
+		"enabled": false,
+	})
 }

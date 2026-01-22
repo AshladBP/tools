@@ -14,10 +14,12 @@ type Player struct {
 	MaxLoseStreak   int       // Longest losing streak
 	TotalWins       int       // Count of winning spins (payout > bet)
 	TotalLosses     int       // Count of losing spins (payout <= bet)
+	BreakevenSpins  int       // Count of spins where payout >= 1.0 (breakeven or better)
 	FirstBigWinSpin int       // Spin number of first big win (-1 if never)
 	DangerEvents    int       // Count of spins where balance was below danger threshold
 	TotalWagered    float64   // Total amount bet
 	TotalWon        float64   // Total payouts received
+	TotalSpins      int       // Total number of spins played
 }
 
 // NewPlayer creates a new player with initial balance.
@@ -83,6 +85,12 @@ func (p *Player) ProcessSpin(spinNum int, payout, betAmount, bigWinThreshold, da
 	// Check for big win (first time)
 	if p.FirstBigWinSpin == -1 && payout >= bigWinThreshold {
 		p.FirstBigWinSpin = spinNum
+	}
+
+	// Track total spins and breakeven spins
+	p.TotalSpins++
+	if payout >= 1.0 {
+		p.BreakevenSpins++ // Breakeven or better (payout >= cost)
 	}
 
 	// Update win/lose counts and streaks

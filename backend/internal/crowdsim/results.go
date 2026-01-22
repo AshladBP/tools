@@ -2,9 +2,13 @@ package crowdsim
 
 // ModeInfo contains information about the mode type and cost
 type ModeInfo struct {
-	Cost        float64 `json:"cost"`
-	IsBonusMode bool    `json:"is_bonus_mode"`
-	Note        string  `json:"note"`
+	Cost                    float64 `json:"cost"`
+	IsBonusMode             bool    `json:"is_bonus_mode"`
+	BreakevenRate           float64 `json:"breakeven_rate"`            // Theoretical P(payout >= cost) from LUT
+	SimulatedBreakevenRate  float64 `json:"simulated_breakeven_rate"`  // Empirical breakeven rate from simulation
+	BreakevenRateDeviation  float64 `json:"breakeven_rate_deviation"`  // Simulated - Theoretical
+	Note                    string  `json:"note"`
+	MaxPayout               float64 `json:"max_payout,omitempty"`      // Maximum payout in the mode (normalized by cost)
 }
 
 // SimResult holds complete simulation results.

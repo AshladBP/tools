@@ -45,6 +45,7 @@ export interface PayoutInfo {
 
 export interface Statistics {
 	mode: string;
+	cost: number; // Cost to trigger this mode (1.0 for base)
 	total_outcomes: number;
 	total_weight: number;
 	rtp: number;
@@ -61,6 +62,9 @@ export interface Statistics {
 	distribution: DistributionItem[];
 	top_payouts: PayoutInfo[];
 	zero_payout_rate: number;
+	// Cost-adjusted metrics (for bonus modes)
+	breakeven_rate: number; // P(payout >= cost)
+	cost_adj_volatility: number; // StdDev / Cost
 }
 
 export interface Outcome {
@@ -72,12 +76,15 @@ export interface Outcome {
 
 export interface CompareItem {
 	mode: string;
+	cost: number;
 	rtp: number;
 	hit_rate: number;
 	max_payout: number;
 	volatility: number;
 	mean_payout: number;
 	median_payout: number;
+	breakeven_rate: number;
+	cost_adj_volatility: number;
 }
 
 export interface CompareResponse {
@@ -366,7 +373,11 @@ export interface AllModesComplianceResult {
 export interface ModeInfo {
 	cost: number;
 	is_bonus_mode: boolean;
+	breakeven_rate: number; // Theoretical P(payout >= cost) from LUT
+	simulated_breakeven_rate: number; // Empirical breakeven rate from simulation
+	breakeven_rate_deviation: number; // Simulated - Theoretical
 	note: string;
+	max_payout?: number; // Maximum payout in the mode (normalized by cost)
 }
 
 // CrowdSim types
@@ -587,17 +598,25 @@ export interface OptimizerBackupInfo {
 // ============================================================================
 
 // Constraint type for bucket configuration
-export type BucketConstraintType = 'frequency' | 'rtp_percent' | 'auto';
+export type BucketConstraintType = 'frequency' | 'rtp_percent' | 'auto' | 'max_win_freq' | 'outcome_freq';
+
+// Constraint priority (1=hard, 2=soft)
+export type ConstraintPriority = 1 | 2;
+
+// Optimization mode
+export type OptimizationMode = 'fast' | 'balanced' | 'precise';
 
 // Configuration for a single payout bucket
 export interface BucketConfig {
 	name: string;              // Human-readable name (e.g., "small_wins")
 	min_payout: number;        // Minimum payout in range (inclusive)
 	max_payout: number;        // Maximum payout in range (exclusive)
-	type: BucketConstraintType; // "frequency", "rtp_percent", or "auto"
+	type: BucketConstraintType; // "frequency", "rtp_percent", "auto", "max_win_freq", "outcome_freq"
 	frequency?: number;        // 1 in N spins (e.g., 20 = 1 in 20 spins)
 	rtp_percent?: number;      // % of total RTP (e.g., 0.5 = 0.5% of RTP)
 	auto_exponent?: number;    // For auto: weight ∝ 1/payout^exponent (default 1.0)
+	max_win_frequency?: number; // For max_win_freq: frequency of the max payout in this bucket (1 in N)
+	priority?: ConstraintPriority; // 1=hard, 2=soft constraint
 }
 
 // Request for bucket-based optimization
@@ -607,6 +626,15 @@ export interface BucketOptimizeRequest {
 	buckets: BucketConfig[];
 	save_to_file?: boolean;
 	create_backup?: boolean;
+	enable_brute_force?: boolean;   // Enable iterative brute force search
+	max_iterations?: number;        // Max iterations for brute force
+	optimization_mode?: OptimizationMode; // "fast"/"balanced"/"precise"
+	global_max_win_freq?: number;   // Global max win frequency (1 in N)
+	// Voiding options (deprecated - use enable_auto_voiding)
+	enable_voiding?: boolean;       // DEPRECATED: Enable voiding mode to exclude buckets
+	voided_bucket_indices?: number[]; // DEPRECATED: Indices of buckets to void
+	// Auto-voiding (recommended)
+	enable_auto_voiding?: boolean;  // Enable automatic outcome voiding to reach target RTP
 }
 
 // Result for a single bucket after optimization
@@ -634,6 +662,22 @@ export interface BucketOutcomeDetail {
 	probability: number;
 }
 
+// Information about a voided bucket
+export interface VoidedBucketInfo {
+	index: number;           // Bucket index
+	name: string;            // Bucket name
+	outcome_count: number;   // Number of outcomes voided
+	rtp_contribution: number; // RTP contribution that was removed
+}
+
+// Information about a single auto-voided outcome
+export interface VoidedOutcomeInfo {
+	sim_id: number;          // Simulation ID of the voided outcome
+	payout: number;          // Payout value of the voided outcome
+	reason: string;          // Why it was voided: "duplicate" or "high_payout"
+	rtp_loss: number;        // RTP contribution lost by voiding this outcome
+}
+
 // Full result from bucket optimization
 export interface BucketOptimizeResult {
 	original_rtp: number;
@@ -646,6 +690,11 @@ export interface BucketOptimizeResult {
 	warnings?: string[];
 	outcome_details?: BucketOutcomeDetail[];
 	mode_info?: ModeInfo;
+	voided_buckets?: VoidedBucketInfo[]; // Buckets that were voided (deprecated)
+	// Auto-voiding results
+	voided_outcomes?: VoidedOutcomeInfo[]; // Individual outcomes that were auto-voided
+	total_voided?: number;                 // Total count of voided outcomes
+	voided_rtp?: number;                   // Total RTP removed by voiding
 	config: {
 		target_rtp: number;
 		buckets: BucketConfig[];
@@ -685,4 +734,248 @@ export interface BucketDistributionResponse {
 	offset: number;
 	limit: number;
 	has_more: boolean;
+}
+
+// Brute force optimization info
+export interface BruteForceInfo {
+	iterations: number;      // Total iterations performed
+	search_duration: number; // Search duration in ms
+	final_error: number;     // Final RTP error
+}
+
+// Extended bucket optimize result with brute force info
+export interface BucketOptimizeResultExtended extends BucketOptimizeResult {
+	brute_force_info?: BruteForceInfo;
+}
+
+// WebSocket progress message for brute force optimization
+export interface WSOptimizerProgress {
+	type: 'progress';
+	phase: 'init' | 'search' | 'refine' | 'complete';
+	iteration: number;
+	max_iter: number;
+	current_rtp: number;
+	target_rtp: number;
+	error: number;
+	converged: boolean;
+	elapsed_ms: number;
+}
+
+// WebSocket result message
+export interface WSOptimizerResult {
+	type: 'result';
+	result: BucketOptimizeResultExtended;
+}
+
+// WebSocket error message
+export interface WSOptimizerError {
+	type: 'error';
+	message: string;
+}
+
+// Union type for all WebSocket optimizer messages
+export type WSOptimizerMessage = WSOptimizerProgress | WSOptimizerResult | WSOptimizerError;
+
+// ============================================================================
+// Convex Optimizer Types (CVXPY-based optimization)
+// ============================================================================
+
+export type ConvexDistributionType = 'log_normal' | 'gaussian' | 'exponential';
+
+export interface ConvexDistributionParams {
+	type: ConvexDistributionType;
+	mode?: number;
+	std?: number;
+	mean?: number;
+	power?: number;
+	scale: number;
+}
+
+export interface ConvexCriteriaConfig {
+	name: string;
+	rtp: number;
+	hit_rate: number;
+	average_win?: number;
+	distribution: ConvexDistributionParams;
+	mix_distribution?: ConvexDistributionParams;
+	mix_weight: number;
+}
+
+export interface ConvexOptimizerSettings {
+	kl_divergence_weight: number;
+	smoothness_weight: number;
+}
+
+export interface ConvexOptimizeRequest {
+	mode: string;
+	cost: number;
+	criteria: ConvexCriteriaConfig[];
+	optimizer_settings: ConvexOptimizerSettings[];
+	weight_scale: number;
+	lookup_file: string;
+	segmented_file: string;
+	win_step_size: number;
+	excluded_payouts: number[];
+	save_to_file: boolean;
+	create_backup: boolean;
+}
+
+export interface ConvexHitRateRange {
+	range_start: number;
+	range_end: number;
+	hit_rate: number;
+}
+
+export interface ConvexPlotPoint {
+	x: number;
+	y: number;
+}
+
+export interface ConvexPlotData {
+	actual_points: ConvexPlotPoint[];
+	theoretical_curve: ConvexPlotPoint[];
+	solution_curve: ConvexPlotPoint[];
+	x_label: string;
+	y_label: string;
+	x_min: number;
+	x_max: number;
+	y_min: number;
+	y_max: number;
+}
+
+export interface ConvexCriteriaSolution {
+	name: string;
+	target_rtp: number;
+	achieved_rtp: number;
+	target_hit_rate: number;
+	achieved_hit_rate: number;
+	solved_weights: number[];
+	unique_payout_count: number;
+	distribution_type: string;
+	hit_rate_ranges: ConvexHitRateRange[];
+	solution_metrics: Record<string, number>;
+	plot_data?: ConvexPlotData;
+}
+
+export interface ConvexLookupEntry {
+	sim_id: number;
+	weight: number;
+	payout: number;
+}
+
+export interface ConvexSaveResult {
+	saved: boolean;
+	lookup_path?: string;
+	hitrate_path?: string;
+	backup_path?: string;
+}
+
+export interface ConvexOptimizeResponse {
+	success: boolean;
+	mode: string;
+	original_rtp: number;
+	final_rtp: number;
+	criteria_solutions: ConvexCriteriaSolution[];
+	final_lookup: ConvexLookupEntry[];
+	hit_rate_summary: ConvexHitRateRange[];
+	zero_weight_probability: number;
+	total_lookup_length: number;
+	warnings: string[];
+	save_result?: ConvexSaveResult;
+}
+
+export interface ConvexHealthResponse {
+	status: string;
+	service: string;
+	version: string;
+}
+
+export interface ConvexModeInfoResponse {
+	mode: string;
+	cost: number;
+	criteria_names: string[];
+	lookup_file: string;
+	segmented_file: string;
+	is_bonus_mode: boolean;
+}
+
+// ============================================================================
+// Mode Analyzer Types
+// ============================================================================
+
+export type ModeTypeClassification =
+	| 'standard'      // Standard slots ~96% RTP
+	| 'bonus_narrow'  // Bonus with narrow payout range
+	| 'bonus_wide'    // Bonus with wide payout range
+	| 'high_rtp'      // RTP > 200%
+	| 'extreme';      // RTP > 1000%
+
+export interface BucketRecommendation {
+	min_payout: number;
+	max_payout: number;
+	outcome_count: number;
+	rtp_capacity: number;
+	avg_payout: number;
+	suggested_rtp: number;
+	description: string;
+}
+
+export interface ModeAnalysis {
+	mode: string;
+	mode_type: ModeTypeClassification;
+
+	// LUT statistics
+	total_outcomes: number;
+	min_payout: number;
+	max_payout: number;
+	avg_payout: number;
+	payout_variance: number;
+	payout_std_dev: number;
+
+	// Payout distribution percentiles
+	percentiles: Record<string, number>;
+
+	// RTP boundaries
+	min_achievable_rtp: number;
+	max_achievable_rtp: number;
+
+	// Mode info
+	cost: number;
+	is_bonus_mode: boolean;
+
+	// Recommendations
+	recommended_buckets: BucketRecommendation[];
+	feasible: boolean;
+	feasibility_note?: string;
+	suggested_rtp?: number;
+}
+
+export interface FeasibilityInfo {
+	original: number;
+	effective: number;
+	was_adjusted: boolean;
+	min_possible: number;
+	max_possible: number;
+}
+
+// Void suggestion for when RTP is unreachable
+export interface VoidSuggestion {
+	index: number;           // Bucket index
+	name: string;            // Bucket name
+	min_payout: number;      // Min payout of bucket
+	max_payout: number;      // Max payout of bucket
+	outcome_count: number;   // Number of outcomes in bucket
+	rtp_contribution: number; // RTP contribution of this bucket
+	priority: number;        // Voiding priority (1 = void first)
+}
+
+export interface GenerateConfigsAnalysis {
+	mode_type: ModeTypeClassification;
+	feasible: boolean;
+	feasibility_note?: string;
+	min_achievable_rtp: number;
+	max_achievable_rtp: number;
+	suggested_rtp?: number;
+	is_bonus_mode: boolean;
+	suggested_void_buckets?: VoidSuggestion[]; // Suggestions for voiding when RTP unreachable
 }

@@ -63,6 +63,8 @@ type CrowdSimulator struct {
 	theoreticalRTP float64
 	mode           string
 	modeCost       float64 // Cost from LUT (bet amount)
+	breakevenRate  float64 // P(payout >= cost)
+	maxPayout      float64 // Maximum payout (normalized by cost)
 }
 
 // NewCrowdSimulator creates a new simulator for the given lookup table.
@@ -75,6 +77,27 @@ func NewCrowdSimulator(lut *stakergs.LookupTable, config SimConfig) *CrowdSimula
 	// Use the canonical RTP calculation from stakergs:
 	// RTP = rawRTP / cost, where rawRTP = avg(payout/100)
 	theoreticalRTP := lut.RTP()
+
+	// Calculate breakeven rate: P(payout >= cost) and find max payout
+	breakevenRate := 0.0
+	var maxPayoutCents uint
+	totalWeight := lut.TotalWeight()
+	if totalWeight > 0 {
+		costCents := uint(modeCost * 100)
+		var breakevenWeight uint64
+		for _, o := range lut.Outcomes {
+			if o.Payout >= costCents {
+				breakevenWeight += o.Weight
+			}
+			if o.Payout > maxPayoutCents {
+				maxPayoutCents = o.Payout
+			}
+		}
+		breakevenRate = float64(breakevenWeight) / float64(totalWeight)
+	}
+
+	// Max payout normalized by cost
+	maxPayout := float64(maxPayoutCents) / 100.0 / modeCost
 
 	// Normalize everything to unit bets:
 	// - BetAmount = 1 (each spin costs 1 unit)
@@ -89,6 +112,8 @@ func NewCrowdSimulator(lut *stakergs.LookupTable, config SimConfig) *CrowdSimula
 		theoreticalRTP: theoreticalRTP,
 		mode:           lut.Mode,
 		modeCost:       modeCost,
+		breakevenRate:  breakevenRate,
+		maxPayout:      maxPayout,
 	}
 }
 
@@ -236,23 +261,35 @@ func (s *CrowdSimulator) calculateResults(players []*Player, duration time.Durat
 	result := &SimResult{
 		Mode: s.mode,
 		ModeInfo: ModeInfo{
-			Cost:        s.modeCost,
-			IsBonusMode: isBonusMode,
-			Note:        note,
+			Cost:          s.modeCost,
+			IsBonusMode:   isBonusMode,
+			BreakevenRate: round4(s.breakevenRate),
+			Note:          note,
+			MaxPayout:     s.maxPayout,
 		},
 		Config:         s.config,
 		DurationMs:     duration.Milliseconds(),
 		TheoreticalRTP: round4(s.theoreticalRTP),
 	}
 
-	// Calculate actual RTP
+	// Calculate actual RTP and simulated breakeven rate
 	var totalWagered, totalWon float64
+	var totalBreakevenSpins, totalSpins int
 	for _, p := range players {
 		totalWagered += p.TotalWagered
 		totalWon += p.TotalWon
+		totalBreakevenSpins += p.BreakevenSpins
+		totalSpins += p.TotalSpins
 	}
 	result.ActualRTP = round4(totalWon / totalWagered)
 	result.RTPDeviation = round4(result.ActualRTP - result.TheoreticalRTP)
+
+	// Calculate simulated breakeven rate from actual simulation results
+	if totalSpins > 0 {
+		simulatedBR := float64(totalBreakevenSpins) / float64(totalSpins)
+		result.ModeInfo.SimulatedBreakevenRate = round4(simulatedBR)
+		result.ModeInfo.BreakevenRateDeviation = round4(simulatedBR - s.breakevenRate)
+	}
 
 	// Calculate all metrics
 	result.FinalPoP = CalcPoP(players)

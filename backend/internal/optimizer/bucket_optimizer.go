@@ -21,25 +21,90 @@ const (
 	// ConstraintAuto automatically uses remaining RTP after other buckets
 	// Distributes weights inversely proportional to payout (higher payout = lower weight)
 	ConstraintAuto BucketConstraintType = "auto"
+	// ConstraintMaxWinFreq specifies the frequency of the maximum win outcome in the bucket
+	ConstraintMaxWinFreq BucketConstraintType = "max_win_freq"
+	// ConstraintOutcomeFreq specifies per-outcome frequency constraints
+	ConstraintOutcomeFreq BucketConstraintType = "outcome_freq"
+)
+
+// ConstraintPriority defines whether a constraint is hard or soft
+type ConstraintPriority int
+
+const (
+	// PriorityHard means the constraint must be satisfied (within tolerance)
+	PriorityHard ConstraintPriority = 1
+	// PrioritySoft means the constraint is best-effort
+	PrioritySoft ConstraintPriority = 2
+)
+
+// OptimizationMode defines the search intensity
+type OptimizationMode string
+
+const (
+	// ModeFast uses quick mathematical optimization (~100 iterations)
+	ModeFast OptimizationMode = "fast"
+	// ModeBalanced uses moderate search (~1000 iterations, default)
+	ModeBalanced OptimizationMode = "balanced"
+	// ModePrecise uses thorough search (~10000 iterations)
+	ModePrecise OptimizationMode = "precise"
 )
 
 // BucketConfig defines a payout range and its probability constraint
 type BucketConfig struct {
-	Name        string               `json:"name"`         // Human-readable name (e.g., "small_wins")
-	MinPayout   float64              `json:"min_payout"`   // Minimum payout in range (inclusive)
-	MaxPayout   float64              `json:"max_payout"`   // Maximum payout in range (exclusive, except for last bucket)
-	Type        BucketConstraintType `json:"type"`         // "frequency", "rtp_percent", or "auto"
-	Frequency   float64              `json:"frequency"`    // 1 in N spins (e.g., 20 = 1 in 20 spins)
-	RTPPercent  float64              `json:"rtp_percent"`  // % of total RTP (e.g., 0.5 = 0.5% of RTP)
-	AutoExponent float64             `json:"auto_exponent"` // For auto: weight ∝ 1/payout^exponent (default 1.0, higher = steeper)
+	Name             string               `json:"name"`                        // Human-readable name (e.g., "small_wins")
+	MinPayout        float64              `json:"min_payout"`                  // Minimum payout in range (inclusive)
+	MaxPayout        float64              `json:"max_payout"`                  // Maximum payout in range (exclusive, except for last bucket)
+	Type             BucketConstraintType `json:"type"`                        // "frequency", "rtp_percent", "auto", "max_win_freq", "outcome_freq"
+	Frequency        float64              `json:"frequency,omitempty"`         // 1 in N spins (e.g., 20 = 1 in 20 spins)
+	RTPPercent       float64              `json:"rtp_percent,omitempty"`       // % of total RTP (e.g., 0.5 = 0.5% of RTP)
+	AutoExponent     float64              `json:"auto_exponent,omitempty"`     // For auto: weight ∝ 1/payout^exponent (default 1.0, higher = steeper)
+	MaxWinFrequency  float64              `json:"max_win_frequency,omitempty"` // For max_win_freq: frequency of the max payout in this bucket (1 in N)
+	Priority         ConstraintPriority   `json:"priority,omitempty"`          // 1=hard, 2=soft constraint (default: hard)
+	IsMaxWinBucket   bool                 `json:"is_maxwin_bucket,omitempty"`  // True if this bucket contains the max payout outcome
 }
 
 // BucketOptimizerConfig contains full configuration for bucket-based optimization
 type BucketOptimizerConfig struct {
-	TargetRTP    float64        `json:"target_rtp"`    // Target RTP (e.g., 0.97)
-	RTPTolerance float64        `json:"rtp_tolerance"` // Acceptable deviation (e.g., 0.001)
-	Buckets      []BucketConfig `json:"buckets"`       // Payout range configurations
-	MinWeight    uint64         `json:"min_weight"`    // Minimum weight for any outcome (default 1)
+	TargetRTP           float64          `json:"target_rtp"`                      // Target RTP (e.g., 0.97)
+	RTPTolerance        float64          `json:"rtp_tolerance"`                   // Acceptable deviation (e.g., 0.001)
+	Buckets             []BucketConfig   `json:"buckets"`                         // Payout range configurations
+	MinWeight           uint64           `json:"min_weight"`                      // Minimum weight for any outcome (default 1)
+	MaxIterations       int              `json:"max_iterations,omitempty"`        // Max iterations for brute force (default: 1000)
+	OptimizationMode    OptimizationMode `json:"optimization_mode,omitempty"`     // "fast"/"balanced"/"precise" (default: balanced)
+	GlobalMaxWinFreq    float64          `json:"global_max_win_freq,omitempty"`   // Global max win outcome frequency (1 in N)
+	EnableBruteForce    bool             `json:"enable_brute_force,omitempty"`    // Enable iterative search (default: false)
+	EnableVoiding       bool             `json:"enable_voiding,omitempty"`        // Enable bucket voiding (default: false) - DEPRECATED, use EnableAutoVoiding
+	VoidedBucketIndices []int            `json:"voided_bucket_indices,omitempty"` // Indices of buckets to void - DEPRECATED
+	EnableAutoVoiding   bool             `json:"enable_auto_voiding,omitempty"`   // Enable automatic outcome voiding to reach target RTP
+}
+
+// SearchState holds the current state during iterative optimization
+type SearchState struct {
+	Weights          []uint64           `json:"weights"`
+	CurrentRTP       float64            `json:"current_rtp"`
+	ConstraintErrors map[string]float64 `json:"constraint_errors"`
+	Iteration        int                `json:"iteration"`
+	Phase            string             `json:"phase"` // "init", "search", "refine"
+}
+
+// BruteForceProgress contains progress information for brute force optimization
+type BruteForceProgress struct {
+	Phase       string  `json:"phase"`        // "init", "search", "refine", "complete"
+	Iteration   int     `json:"iteration"`    // Current iteration
+	MaxIter     int     `json:"max_iter"`     // Maximum iterations
+	CurrentRTP  float64 `json:"current_rtp"`  // Current RTP
+	TargetRTP   float64 `json:"target_rtp"`   // Target RTP
+	Error       float64 `json:"error"`        // Current error (|current - target|)
+	Converged   bool    `json:"converged"`    // Whether optimization has converged
+	ElapsedMs   int64   `json:"elapsed_ms"`   // Elapsed time in milliseconds
+}
+
+// BruteForceResult extends BucketOptimizerResult with additional search info
+type BruteForceResult struct {
+	*BucketOptimizerResult
+	Iterations     int     `json:"iterations"`      // Total iterations performed
+	SearchDuration int64   `json:"search_duration"` // Search duration in ms
+	FinalError     float64 `json:"final_error"`     // Final RTP error
 }
 
 // DefaultBucketConfig returns a sensible default bucket configuration
@@ -93,18 +158,38 @@ type BucketResult struct {
 	AvgPayout         float64 `json:"avg_payout"`         // Average payout in bucket
 }
 
+// VoidedBucketInfo contains information about a voided bucket (DEPRECATED - use VoidedOutcomeInfo)
+type VoidedBucketInfo struct {
+	Index           int     `json:"index"`            // Bucket index
+	Name            string  `json:"name"`             // Bucket name
+	OutcomeCount    int     `json:"outcome_count"`    // Number of outcomes excluded
+	RtpContribution float64 `json:"rtp_contribution"` // Estimated RTP contribution that was removed
+}
+
+// VoidedOutcomeInfo contains information about an auto-voided outcome
+type VoidedOutcomeInfo struct {
+	SimID   int     `json:"sim_id"`   // Simulation ID of the voided outcome
+	Payout  float64 `json:"payout"`   // Payout value of the voided outcome
+	Reason  string  `json:"reason"`   // Why it was voided: "duplicate" or "high_payout"
+	RTPLoss float64 `json:"rtp_loss"` // RTP contribution lost by voiding this outcome
+}
+
 // BucketOptimizerResult contains the full optimization result
 type BucketOptimizerResult struct {
-	OriginalRTP     float64               `json:"original_rtp"`
-	FinalRTP        float64               `json:"final_rtp"`
-	TargetRTP       float64               `json:"target_rtp"`
-	Converged       bool                  `json:"converged"`
-	NewWeights      []uint64              `json:"new_weights"`
-	BucketResults   []BucketResult        `json:"bucket_results"`
-	LossResult      *BucketResult         `json:"loss_result"`
-	TotalWeight     uint64                `json:"total_weight"`
-	Warnings        []string              `json:"warnings,omitempty"`
-	OutcomeDetails  []OutcomeDetail       `json:"outcome_details,omitempty"`
+	OriginalRTP    float64            `json:"original_rtp"`
+	FinalRTP       float64            `json:"final_rtp"`
+	TargetRTP      float64            `json:"target_rtp"`
+	Converged      bool               `json:"converged"`
+	NewWeights     []uint64           `json:"new_weights"`
+	BucketResults  []BucketResult     `json:"bucket_results"`
+	LossResult     *BucketResult      `json:"loss_result"`
+	TotalWeight    uint64             `json:"total_weight"`
+	Warnings       []string           `json:"warnings,omitempty"`
+	OutcomeDetails []OutcomeDetail    `json:"outcome_details,omitempty"`
+	VoidedBuckets  []VoidedBucketInfo `json:"voided_buckets,omitempty"`  // DEPRECATED - Buckets that were voided
+	VoidedOutcomes []VoidedOutcomeInfo `json:"voided_outcomes,omitempty"` // Auto-voided outcomes
+	TotalVoided    int                 `json:"total_voided,omitempty"`    // Total count of voided outcomes
+	VoidedRTP      float64             `json:"voided_rtp,omitempty"`      // Total RTP removed by voiding
 }
 
 // OutcomeDetail shows how each outcome was assigned
@@ -127,6 +212,155 @@ type bucketAssignment struct {
 	avgPayout         float64
 	rtpContribution   float64
 	isAuto            bool // True if this is an auto bucket
+	isVoided          bool // True if this bucket is voided (excluded from optimization)
+}
+
+// payoutGroup groups outcomes by their payout value for auto-voiding analysis
+type payoutGroup struct {
+	payout        float64
+	indices       []int   // Outcome indices with this payout
+	simIDs        []int   // SimIDs for these outcomes
+	rtpPerOutcome float64 // RTP contribution per outcome (with uniform distribution)
+}
+
+// autoSelectOutcomesToVoid automatically selects which outcomes to void to reach target RTP
+// Strategy:
+// 1. First void duplicate high payouts (same payout appearing multiple times)
+// 2. Then void unique high payouts starting from the highest
+func autoSelectOutcomesToVoid(
+	payouts []float64,
+	simIDs []int,
+	targetRTP float64,
+	currentMinRTP float64,
+) ([]int, []VoidedOutcomeInfo) {
+	if currentMinRTP <= targetRTP {
+		return nil, nil // No voiding needed
+	}
+
+	rtpToRemove := currentMinRTP - targetRTP
+	n := len(payouts)
+	if n == 0 {
+		return nil, nil
+	}
+
+	// Group outcomes by payout
+	payoutMap := make(map[float64]*payoutGroup)
+	for i, p := range payouts {
+		if p <= 0 {
+			continue // Skip loss outcomes
+		}
+		if group, exists := payoutMap[p]; exists {
+			group.indices = append(group.indices, i)
+			group.simIDs = append(group.simIDs, simIDs[i])
+		} else {
+			payoutMap[p] = &payoutGroup{
+				payout:  p,
+				indices: []int{i},
+				simIDs:  []int{simIDs[i]},
+			}
+		}
+	}
+
+	// Calculate RTP per outcome for each payout (assuming uniform distribution)
+	// RTP contribution = payout * (1/n) where n is total outcomes
+	for _, group := range payoutMap {
+		group.rtpPerOutcome = group.payout / float64(n)
+	}
+
+	// Sort payouts descending (highest first)
+	var sortedPayouts []float64
+	for p := range payoutMap {
+		sortedPayouts = append(sortedPayouts, p)
+	}
+	sort.Slice(sortedPayouts, func(i, j int) bool {
+		return sortedPayouts[i] > sortedPayouts[j]
+	})
+
+	var voidedIndices []int
+	var voidedOutcomes []VoidedOutcomeInfo
+	removedRTP := 0.0
+
+	// Phase 1: Void duplicate high payouts (keep one of each)
+	for _, payout := range sortedPayouts {
+		if removedRTP >= rtpToRemove {
+			break
+		}
+		group := payoutMap[payout]
+		if len(group.indices) > 1 {
+			// Void all but one (keep the first)
+			for i := 1; i < len(group.indices); i++ {
+				if removedRTP >= rtpToRemove {
+					break
+				}
+				voidedIndices = append(voidedIndices, group.indices[i])
+				voidedOutcomes = append(voidedOutcomes, VoidedOutcomeInfo{
+					SimID:   group.simIDs[i],
+					Payout:  group.payout,
+					Reason:  "duplicate",
+					RTPLoss: group.rtpPerOutcome,
+				})
+				removedRTP += group.rtpPerOutcome
+			}
+		}
+	}
+
+	// Phase 2: If still need to remove RTP, void unique high payouts
+	for _, payout := range sortedPayouts {
+		if removedRTP >= rtpToRemove {
+			break
+		}
+		group := payoutMap[payout]
+		// Check if all of this payout were already voided (or if it was kept as the single remaining)
+		alreadyVoided := 0
+		for _, idx := range voidedIndices {
+			for _, gidx := range group.indices {
+				if idx == gidx {
+					alreadyVoided++
+					break
+				}
+			}
+		}
+		// If we have at least one remaining (not voided), void it
+		if alreadyVoided < len(group.indices) {
+			// Find first non-voided index
+			for i, idx := range group.indices {
+				isAlreadyVoided := false
+				for _, vidx := range voidedIndices {
+					if vidx == idx {
+						isAlreadyVoided = true
+						break
+					}
+				}
+				if !isAlreadyVoided {
+					voidedIndices = append(voidedIndices, idx)
+					voidedOutcomes = append(voidedOutcomes, VoidedOutcomeInfo{
+						SimID:   group.simIDs[i],
+						Payout:  group.payout,
+						Reason:  "high_payout",
+						RTPLoss: group.rtpPerOutcome,
+					})
+					removedRTP += group.rtpPerOutcome
+					break
+				}
+			}
+		}
+	}
+
+	return voidedIndices, voidedOutcomes
+}
+
+// calculateMinAchievableRTP calculates the minimum RTP possible with min weights
+// This assumes each outcome has minimum weight, giving uniform distribution
+func calculateMinAchievableRTP(payouts []float64) float64 {
+	if len(payouts) == 0 {
+		return 0
+	}
+	// With uniform weights, RTP = sum(payouts) / n
+	sum := 0.0
+	for _, p := range payouts {
+		sum += p
+	}
+	return sum / float64(len(payouts))
 }
 
 // OptimizeTable optimizes a lookup table using bucket constraints
@@ -151,15 +385,77 @@ func (o *BucketOptimizer) OptimizeTable(table *stakergs.LookupTable) (*BucketOpt
 
 	originalRTP := calculateRTPFromWeights(originalWeights, payouts)
 
+	// Extract simIDs for auto-voiding
+	simIDs := make([]int, n)
+	for i, outcome := range table.Outcomes {
+		simIDs[i] = outcome.SimID
+	}
+
+	// NEW: Auto-voiding - automatically select outcomes to void
+	var autoVoidedIndices []int
+	var autoVoidedOutcomes []VoidedOutcomeInfo
+	var autoVoidedRTP float64
+
+	if o.config.EnableAutoVoiding {
+		minRTP := calculateMinAchievableRTP(payouts)
+		autoVoidedIndices, autoVoidedOutcomes = autoSelectOutcomesToVoid(payouts, simIDs, o.config.TargetRTP, minRTP)
+		// Calculate total voided RTP
+		for _, vo := range autoVoidedOutcomes {
+			autoVoidedRTP += vo.RTPLoss
+		}
+	}
+
+	// LEGACY: Create a set of voided bucket indices for fast lookup (deprecated)
+	voidedBucketSet := make(map[int]bool)
+	if o.config.EnableVoiding && len(o.config.VoidedBucketIndices) > 0 {
+		for _, idx := range o.config.VoidedBucketIndices {
+			voidedBucketSet[idx] = true
+		}
+	}
+
 	// Assign outcomes to buckets
 	assignments, lossIndices, warnings := o.assignOutcomesToBuckets(payouts)
 
-	// Calculate target probabilities for each bucket
+	// LEGACY: Mark voided buckets and collect voided outcomes info (deprecated)
+	var voidedBuckets []VoidedBucketInfo
+	var voidedOutcomeIndices []int
+	for i := range assignments {
+		if voidedBucketSet[i] {
+			assignments[i].isVoided = true
+			// Calculate estimated RTP contribution for this bucket
+			var sumPayout float64
+			for _, p := range assignments[i].payouts {
+				sumPayout += p
+			}
+			avgPayout := 0.0
+			if len(assignments[i].payouts) > 0 {
+				avgPayout = sumPayout / float64(len(assignments[i].payouts))
+			}
+			// Estimate RTP contribution (rough estimate based on uniform distribution)
+			rtpContrib := avgPayout * float64(len(assignments[i].outcomeIndices)) / float64(n) * 100
+
+			voidedBuckets = append(voidedBuckets, VoidedBucketInfo{
+				Index:           i,
+				Name:            assignments[i].config.Name,
+				OutcomeCount:    len(assignments[i].outcomeIndices),
+				RtpContribution: rtpContrib,
+			})
+			// Collect voided outcome indices
+			voidedOutcomeIndices = append(voidedOutcomeIndices, assignments[i].outcomeIndices...)
+		}
+	}
+
+	// Merge auto-voided indices with legacy voided indices
+	if len(autoVoidedIndices) > 0 {
+		voidedOutcomeIndices = append(voidedOutcomeIndices, autoVoidedIndices...)
+	}
+
+	// Calculate target probabilities for each bucket (excluding voided)
 	probWarnings := o.calculateTargetProbabilities(assignments)
 	warnings = append(warnings, probWarnings...)
 
-	// Calculate weights
-	newWeights, bucketResults, lossResult := o.calculateWeights(payouts, assignments, lossIndices)
+	// Calculate weights (voided outcomes will have weight 0)
+	newWeights, bucketResults, lossResult := o.calculateWeightsWithVoiding(payouts, assignments, lossIndices, voidedOutcomeIndices)
 
 	// Calculate final RTP
 	finalRTP := calculateRTPFromWeights(newWeights, payouts)
@@ -167,7 +463,7 @@ func (o *BucketOptimizer) OptimizeTable(table *stakergs.LookupTable) (*BucketOpt
 
 	// Fine-tune if not converged
 	if !converged && len(lossIndices) > 0 {
-		newWeights = o.fineTuneLossWeight(newWeights, payouts, lossIndices)
+		newWeights = o.fineTuneLossWeightWithVoiding(newWeights, payouts, lossIndices, voidedOutcomeIndices)
 		finalRTP = calculateRTPFromWeights(newWeights, payouts)
 		converged = math.Abs(finalRTP-o.config.TargetRTP) <= o.config.RTPTolerance
 
@@ -189,8 +485,26 @@ func (o *BucketOptimizer) OptimizeTable(table *stakergs.LookupTable) (*BucketOpt
 		}
 	}
 
+	// Add info about legacy bucket voiding if applied (deprecated)
+	if len(voidedBuckets) > 0 {
+		var voidedNames []string
+		for _, vb := range voidedBuckets {
+			voidedNames = append(voidedNames, vb.Name)
+		}
+		warnings = append(warnings, fmt.Sprintf(
+			"Voided %d bucket(s) to reach target RTP: %v",
+			len(voidedBuckets), voidedNames))
+	}
+
+	// Add info about auto-voiding if applied
+	if len(autoVoidedOutcomes) > 0 {
+		warnings = append(warnings, fmt.Sprintf(
+			"Auto-voided %d outcome(s), removed %.2f%% RTP",
+			len(autoVoidedOutcomes), autoVoidedRTP*100))
+	}
+
 	// Build outcome details
-	outcomeDetails := o.buildOutcomeDetails(table, payouts, originalWeights, newWeights, assignments, lossIndices)
+	outcomeDetails := o.buildOutcomeDetailsWithVoiding(table, payouts, originalWeights, newWeights, assignments, lossIndices, voidedOutcomeIndices)
 
 	return &BucketOptimizerResult{
 		OriginalRTP:    originalRTP,
@@ -203,6 +517,10 @@ func (o *BucketOptimizer) OptimizeTable(table *stakergs.LookupTable) (*BucketOpt
 		TotalWeight:    sumUint64(newWeights),
 		Warnings:       warnings,
 		OutcomeDetails: outcomeDetails,
+		VoidedBuckets:  voidedBuckets,
+		VoidedOutcomes: autoVoidedOutcomes,
+		TotalVoided:    len(autoVoidedOutcomes),
+		VoidedRTP:      autoVoidedRTP,
 	}, nil
 }
 
@@ -642,6 +960,248 @@ func (o *BucketOptimizer) buildOutcomeDetails(table *stakergs.LookupTable, payou
 	return details
 }
 
+// calculateWeightsWithVoiding converts probabilities to weights, setting voided outcomes to weight 0
+func (o *BucketOptimizer) calculateWeightsWithVoiding(payouts []float64, assignments []bucketAssignment, lossIndices []int, voidedOutcomeIndices []int) ([]uint64, []BucketResult, *BucketResult) {
+	n := len(payouts)
+	weights := make([]uint64, n)
+
+	// Create set of voided outcome indices
+	voidedSet := make(map[int]bool)
+	for _, idx := range voidedOutcomeIndices {
+		voidedSet[idx] = true
+	}
+
+	// Use large base for precision
+	baseWeight := common.BaseWeight
+
+	// Calculate total win probability and RTP contribution (excluding voided)
+	var totalWinProb float64
+	var totalWinRTP float64
+
+	bucketResults := make([]BucketResult, 0, len(assignments))
+
+	for _, bucket := range assignments {
+		if len(bucket.outcomeIndices) == 0 || bucket.isVoided {
+			continue
+		}
+
+		var actualTotalWeight uint64
+
+		if bucket.isAuto && len(bucket.outcomeProbs) == len(bucket.outcomeIndices) {
+			// Auto bucket: use per-outcome probabilities
+			for j, idx := range bucket.outcomeIndices {
+				if voidedSet[idx] {
+					weights[idx] = 0
+					continue
+				}
+				prob := bucket.outcomeProbs[j]
+				w := uint64(prob * float64(baseWeight))
+				if w < o.config.MinWeight {
+					w = o.config.MinWeight
+				}
+				weights[idx] = w
+				actualTotalWeight += w
+			}
+		} else {
+			// Non-auto bucket: distribute evenly (excluding voided)
+			nonVoidedCount := 0
+			for _, idx := range bucket.outcomeIndices {
+				if !voidedSet[idx] {
+					nonVoidedCount++
+				}
+			}
+
+			if nonVoidedCount > 0 {
+				bucketTotalWeight := uint64(bucket.targetProb * float64(baseWeight))
+				weightPerOutcome := bucketTotalWeight / uint64(nonVoidedCount)
+
+				if weightPerOutcome < o.config.MinWeight {
+					weightPerOutcome = o.config.MinWeight
+				}
+
+				for _, idx := range bucket.outcomeIndices {
+					if voidedSet[idx] {
+						weights[idx] = 0
+						continue
+					}
+					weights[idx] = weightPerOutcome
+					actualTotalWeight += weightPerOutcome
+				}
+			}
+		}
+
+		totalWinProb += bucket.targetProb
+		totalWinRTP += bucket.rtpContribution
+
+		// Record bucket result
+		targetFreq := 0.0
+		if bucket.targetProb > 0 {
+			targetFreq = 1.0 / bucket.targetProb
+		}
+
+		bucketResults = append(bucketResults, BucketResult{
+			Name:              bucket.config.Name,
+			MinPayout:         bucket.config.MinPayout,
+			MaxPayout:         bucket.config.MaxPayout,
+			OutcomeCount:      len(bucket.outcomeIndices),
+			TargetProbability: bucket.targetProb,
+			TargetFrequency:   targetFreq,
+			RTPContribution:   bucket.rtpContribution * 100,
+			TotalWeight:       actualTotalWeight,
+			AvgPayout:         bucket.avgPayout,
+		})
+	}
+
+	// Set voided outcomes to weight 0
+	for _, idx := range voidedOutcomeIndices {
+		weights[idx] = 0
+	}
+
+	// Calculate loss weight (same as before)
+	var weightedPayoutSum float64
+	var totalWinWeight uint64
+	for i, w := range weights {
+		if payouts[i] > 0 && w > 0 {
+			weightedPayoutSum += float64(w) * payouts[i]
+			totalWinWeight += w
+		}
+	}
+
+	// Required loss weight
+	requiredLossWeight := weightedPayoutSum/o.config.TargetRTP - float64(totalWinWeight)
+	if requiredLossWeight < float64(o.config.MinWeight) {
+		requiredLossWeight = float64(o.config.MinWeight)
+	}
+
+	// Distribute loss weight among loss outcomes
+	var lossResult *BucketResult
+	if len(lossIndices) > 0 {
+		lossWeightPerOutcome := uint64(math.Round(requiredLossWeight / float64(len(lossIndices))))
+		if lossWeightPerOutcome < o.config.MinWeight {
+			lossWeightPerOutcome = o.config.MinWeight
+		}
+
+		var totalLossWeight uint64
+		for _, idx := range lossIndices {
+			weights[idx] = lossWeightPerOutcome
+			totalLossWeight += lossWeightPerOutcome
+		}
+
+		totalWeight := totalWinWeight + totalLossWeight
+		lossProb := float64(totalLossWeight) / float64(totalWeight)
+
+		lossResult = &BucketResult{
+			Name:              "loss",
+			MinPayout:         0,
+			MaxPayout:         0,
+			OutcomeCount:      len(lossIndices),
+			TargetProbability: 1 - totalWinProb,
+			ActualProbability: lossProb,
+			TargetFrequency:   1.0 / (1 - totalWinProb),
+			ActualFrequency:   1.0 / lossProb,
+			RTPContribution:   0,
+			TotalWeight:       totalLossWeight,
+			AvgPayout:         0,
+		}
+	}
+
+	// Update bucket results with actual probabilities
+	totalWeight := sumUint64(weights)
+	for i := range bucketResults {
+		if bucketResults[i].TotalWeight > 0 && totalWeight > 0 {
+			bucketResults[i].ActualProbability = float64(bucketResults[i].TotalWeight) / float64(totalWeight)
+			bucketResults[i].ActualFrequency = 1.0 / bucketResults[i].ActualProbability
+			bucketResults[i].RTPContribution = bucketResults[i].ActualProbability * bucketResults[i].AvgPayout * 100
+		}
+	}
+
+	return weights, bucketResults, lossResult
+}
+
+// fineTuneLossWeightWithVoiding adjusts loss weight while respecting voided outcomes
+func (o *BucketOptimizer) fineTuneLossWeightWithVoiding(weights []uint64, payouts []float64, lossIndices []int, voidedOutcomeIndices []int) []uint64 {
+	result := make([]uint64, len(weights))
+	copy(result, weights)
+
+	// Create set of voided outcome indices
+	voidedSet := make(map[int]bool)
+	for _, idx := range voidedOutcomeIndices {
+		voidedSet[idx] = true
+	}
+
+	// Calculate weighted payout sum for wins (excluding voided)
+	var weightedPayoutSum float64
+	var totalWinWeight uint64
+	for i, p := range payouts {
+		if p > 0 && result[i] > 0 && !voidedSet[i] {
+			weightedPayoutSum += float64(result[i]) * p
+			totalWinWeight += result[i]
+		}
+	}
+
+	// Required loss weight for target RTP
+	requiredLossWeight := weightedPayoutSum/o.config.TargetRTP - float64(totalWinWeight)
+	if requiredLossWeight < float64(len(lossIndices)) {
+		requiredLossWeight = float64(len(lossIndices))
+	}
+
+	// Distribute among loss outcomes
+	lossWeightPerOutcome := uint64(math.Round(requiredLossWeight / float64(len(lossIndices))))
+	if lossWeightPerOutcome < o.config.MinWeight {
+		lossWeightPerOutcome = o.config.MinWeight
+	}
+
+	for _, idx := range lossIndices {
+		result[idx] = lossWeightPerOutcome
+	}
+
+	return result
+}
+
+// buildOutcomeDetailsWithVoiding creates detailed info including voided outcomes
+func (o *BucketOptimizer) buildOutcomeDetailsWithVoiding(table *stakergs.LookupTable, payouts []float64, oldWeights, newWeights []uint64, assignments []bucketAssignment, lossIndices []int, voidedOutcomeIndices []int) []OutcomeDetail {
+	totalWeight := sumUint64(newWeights)
+	details := make([]OutcomeDetail, len(payouts))
+
+	// Create set of voided outcome indices
+	voidedSet := make(map[int]bool)
+	for _, idx := range voidedOutcomeIndices {
+		voidedSet[idx] = true
+	}
+
+	// Create index to bucket name mapping
+	bucketNames := make(map[int]string)
+	for _, bucket := range assignments {
+		for _, idx := range bucket.outcomeIndices {
+			if bucket.isVoided || voidedSet[idx] {
+				bucketNames[idx] = bucket.config.Name + " (voided)"
+			} else {
+				bucketNames[idx] = bucket.config.Name
+			}
+		}
+	}
+	for _, idx := range lossIndices {
+		bucketNames[idx] = "loss"
+	}
+
+	for i := range payouts {
+		prob := 0.0
+		if totalWeight > 0 {
+			prob = float64(newWeights[i]) / float64(totalWeight)
+		}
+		details[i] = OutcomeDetail{
+			SimID:       table.Outcomes[i].SimID,
+			Payout:      payouts[i] * table.Cost,
+			OldWeight:   oldWeights[i],
+			NewWeight:   newWeights[i],
+			BucketName:  bucketNames[i],
+			Probability: prob,
+		}
+	}
+
+	return details
+}
+
 // OptimizeFromLoader loads a mode and optimizes it
 func (o *BucketOptimizer) OptimizeFromLoader(loader *lut.Loader, mode string) (*BucketOptimizerResult, error) {
 	table, err := loader.GetMode(mode)
@@ -684,8 +1244,8 @@ func ValidateBuckets(buckets []BucketConfig) error {
 		if bucket.MinPayout < 0 {
 			return fmt.Errorf("bucket %s: min_payout cannot be negative", bucket.Name)
 		}
-		if bucket.MaxPayout <= bucket.MinPayout {
-			return fmt.Errorf("bucket %s: max_payout must be > min_payout", bucket.Name)
+		if bucket.MaxPayout < bucket.MinPayout {
+			return fmt.Errorf("bucket %s: max_payout must be >= min_payout", bucket.Name)
 		}
 
 		switch bucket.Type {
@@ -703,8 +1263,19 @@ func ValidateBuckets(buckets []BucketConfig) error {
 			if bucket.AutoExponent < 0 {
 				return fmt.Errorf("bucket %s: auto_exponent cannot be negative", bucket.Name)
 			}
+		case ConstraintMaxWinFreq:
+			if bucket.MaxWinFrequency <= 0 {
+				return fmt.Errorf("bucket %s: max_win_frequency must be > 0", bucket.Name)
+			}
+		case ConstraintOutcomeFreq:
+			// Outcome frequency uses per-outcome constraints, validated separately
 		default:
 			return fmt.Errorf("bucket %s: unknown constraint type %s", bucket.Name, bucket.Type)
+		}
+
+		// Validate priority if set
+		if bucket.Priority != 0 && bucket.Priority != PriorityHard && bucket.Priority != PrioritySoft {
+			return fmt.Errorf("bucket %s: invalid priority %d (must be 1=hard or 2=soft)", bucket.Name, bucket.Priority)
 		}
 	}
 
@@ -716,8 +1287,27 @@ func ValidateBuckets(buckets []BucketConfig) error {
 	return nil
 }
 
+// ValidateBruteForceConfig validates brute force optimization config
+func ValidateBruteForceConfig(config *BucketOptimizerConfig) error {
+	if config.TargetRTP <= 0 || config.TargetRTP > 1 {
+		return fmt.Errorf("target_rtp must be between 0 and 1")
+	}
+	if config.RTPTolerance < 0 {
+		return fmt.Errorf("rtp_tolerance cannot be negative")
+	}
+	if config.MaxIterations < 0 {
+		return fmt.Errorf("max_iterations cannot be negative")
+	}
+	if config.GlobalMaxWinFreq < 0 {
+		return fmt.Errorf("global_max_win_freq cannot be negative")
+	}
+	// OptimizationMode is no longer validated - runs until converged or stopped
+	return nil
+}
+
 // SuggestBuckets analyzes a table and suggests bucket configuration
 // For high-cost modes (bonus), generates buckets adapted to normalized payouts
+// Always creates a separate maxwin bucket for precise control
 func SuggestBuckets(table *stakergs.LookupTable, targetRTP float64) []BucketConfig {
 	cost := table.Cost
 	if cost <= 0 {
@@ -741,14 +1331,79 @@ func SuggestBuckets(table *stakergs.LookupTable, targetRTP float64) []BucketConf
 		return []BucketConfig{}
 	}
 
+	var buckets []BucketConfig
+
 	// For bonus modes (cost > 1), all normalized payouts are typically < 2x
 	// Generate buckets based on actual payout distribution
 	if cost > 1.5 {
-		return suggestBonusBuckets(minPayout, maxPayout, targetRTP)
+		buckets = suggestBonusBuckets(minPayout, maxPayout, targetRTP)
+	} else {
+		// Standard mode buckets
+		buckets = suggestStandardBuckets(maxPayout)
 	}
 
-	// Standard mode buckets
-	return suggestStandardBuckets(maxPayout)
+	// Ensure maxwin is always a separate bucket
+	buckets = ensureMaxWinBucket(buckets, maxPayout)
+
+	return buckets
+}
+
+// ensureMaxWinBucket ensures the max payout has its own dedicated bucket
+// Creates a precise bucket that contains ONLY the maximum payout outcome
+func ensureMaxWinBucket(buckets []BucketConfig, maxPayout float64) []BucketConfig {
+	if len(buckets) == 0 || maxPayout <= 0 {
+		return buckets
+	}
+
+	// Find the bucket that contains maxPayout
+	var containingIdx int = -1
+	for i, b := range buckets {
+		if maxPayout >= b.MinPayout && maxPayout <= b.MaxPayout {
+			containingIdx = i
+			break
+		}
+	}
+
+	// If maxPayout is in the last bucket with very narrow range, just mark it
+	if containingIdx >= 0 && buckets[containingIdx].IsMaxWinBucket {
+		return buckets
+	}
+
+	// Create a precise threshold just below maxPayout
+	// Use 0.1% below maxPayout or 0.01 whichever is larger
+	epsilon := maxPayout * 0.001
+	if epsilon < 0.01 {
+		epsilon = 0.01
+	}
+	maxWinThreshold := maxPayout - epsilon
+
+	// Find which bucket contains the maxPayout and split it
+	if containingIdx >= 0 {
+		bucket := buckets[containingIdx]
+
+		// If the bucket only contains maxPayout range already, just mark it
+		if bucket.MinPayout >= maxWinThreshold {
+			buckets[containingIdx].IsMaxWinBucket = true
+			buckets[containingIdx].Name = "maxwin"
+			return buckets
+		}
+
+		// Split the bucket: adjust its max to exclude maxwin
+		buckets[containingIdx].MaxPayout = maxWinThreshold
+	}
+
+	// Add dedicated maxwin bucket with precise range
+	maxwinBucket := BucketConfig{
+		Name:           "maxwin",
+		MinPayout:      maxWinThreshold,
+		MaxPayout:      maxPayout + 0.01, // Tiny margin to ensure inclusion
+		Type:           ConstraintMaxWinFreq,
+		MaxWinFrequency: 50000, // Default 1:50000 frequency
+		IsMaxWinBucket: true,
+	}
+
+	buckets = append(buckets, maxwinBucket)
+	return buckets
 }
 
 // suggestBonusBuckets generates buckets for high-cost modes (bonus)
@@ -824,10 +1479,11 @@ func suggestBonusBuckets(minPayout, maxPayout, targetRTP float64) []BucketConfig
 }
 
 // suggestStandardBuckets generates buckets for normal modes (cost = 1)
+// Updated to generate 10-12 buckets with finer granularity
 func suggestStandardBuckets(maxPayout float64) []BucketConfig {
 	buckets := []BucketConfig{}
 
-	// Sub-1x wins (if exist)
+	// Sub-1x wins (0.01-1x) - partial returns
 	buckets = append(buckets, BucketConfig{
 		Name:      "sub_1x",
 		MinPayout: 0.01,
@@ -836,52 +1492,127 @@ func suggestStandardBuckets(maxPayout float64) []BucketConfig {
 		Frequency: 3, // 1 in 3
 	})
 
-	// Small wins: 1x-5x
-	if maxPayout >= 1 {
+	// Break-even zone: 1x-2x
+	if maxPayout >= 2 {
 		buckets = append(buckets, BucketConfig{
-			Name:      "small",
+			Name:      "breakeven",
 			MinPayout: 1,
-			MaxPayout: 5,
+			MaxPayout: 2,
 			Type:      ConstraintFrequency,
-			Frequency: 6, // 1 in 6
+			Frequency: 5, // 1 in 5
 		})
 	}
 
-	// Medium wins: 5x-20x
+	// Small wins: 2x-5x
 	if maxPayout >= 5 {
 		buckets = append(buckets, BucketConfig{
-			Name:      "medium",
-			MinPayout: 5,
-			MaxPayout: 20,
+			Name:      "small",
+			MinPayout: 2,
+			MaxPayout: 5,
 			Type:      ConstraintFrequency,
-			Frequency: 25, // 1 in 25
+			Frequency: 8, // 1 in 8
 		})
 	}
 
-	// Large wins: 20x-100x
-	if maxPayout >= 20 {
+	// Low-medium wins: 5x-10x
+	if maxPayout >= 10 {
 		buckets = append(buckets, BucketConfig{
-			Name:      "large",
-			MinPayout: 20,
+			Name:      "low_med",
+			MinPayout: 5,
+			MaxPayout: 10,
+			Type:      ConstraintFrequency,
+			Frequency: 15, // 1 in 15
+		})
+	}
+
+	// Medium wins: 10x-25x
+	if maxPayout >= 25 {
+		buckets = append(buckets, BucketConfig{
+			Name:      "medium",
+			MinPayout: 10,
+			MaxPayout: 25,
+			Type:      ConstraintFrequency,
+			Frequency: 30, // 1 in 30
+		})
+	}
+
+	// Medium-high wins: 25x-50x
+	if maxPayout >= 50 {
+		buckets = append(buckets, BucketConfig{
+			Name:      "med_high",
+			MinPayout: 25,
+			MaxPayout: 50,
+			Type:      ConstraintFrequency,
+			Frequency: 60, // 1 in 60
+		})
+	}
+
+	// High wins: 50x-100x
+	if maxPayout >= 100 {
+		buckets = append(buckets, BucketConfig{
+			Name:      "high",
+			MinPayout: 50,
 			MaxPayout: 100,
 			Type:      ConstraintFrequency,
 			Frequency: 100, // 1 in 100
 		})
 	}
 
-	// Huge wins: 100x-1000x (RTP-based)
-	if maxPayout >= 100 {
+	// Very high wins: 100x-250x (RTP-based)
+	if maxPayout >= 250 {
 		buckets = append(buckets, BucketConfig{
-			Name:       "huge",
+			Name:       "very_high",
 			MinPayout:  100,
-			MaxPayout:  1000,
+			MaxPayout:  250,
 			Type:       ConstraintRTPPercent,
-			RTPPercent: 5, // 5% of RTP
+			RTPPercent: 3, // 3% of RTP
 		})
 	}
 
-	// Jackpot: 1000x+ (RTP-based)
+	// Huge wins: 250x-500x (RTP-based)
+	if maxPayout >= 500 {
+		buckets = append(buckets, BucketConfig{
+			Name:       "huge",
+			MinPayout:  250,
+			MaxPayout:  500,
+			Type:       ConstraintRTPPercent,
+			RTPPercent: 2, // 2% of RTP
+		})
+	}
+
+	// Massive wins: 500x-1000x (RTP-based)
 	if maxPayout >= 1000 {
+		buckets = append(buckets, BucketConfig{
+			Name:       "massive",
+			MinPayout:  500,
+			MaxPayout:  1000,
+			Type:       ConstraintRTPPercent,
+			RTPPercent: 1, // 1% of RTP
+		})
+	}
+
+	// Epic wins: 1000x-2500x (RTP-based)
+	if maxPayout >= 2500 {
+		buckets = append(buckets, BucketConfig{
+			Name:       "epic",
+			MinPayout:  1000,
+			MaxPayout:  2500,
+			Type:       ConstraintRTPPercent,
+			RTPPercent: 0.5, // 0.5% of RTP
+		})
+	}
+
+	// Jackpot: 2500x+ (RTP-based) - will be split by ensureMaxWinBucket
+	if maxPayout >= 2500 {
+		buckets = append(buckets, BucketConfig{
+			Name:       "jackpot",
+			MinPayout:  2500,
+			MaxPayout:  maxPayout + 1,
+			Type:       ConstraintRTPPercent,
+			RTPPercent: 0.3, // 0.3% of RTP
+		})
+	} else if maxPayout >= 1000 {
+		// For smaller max payouts, jackpot starts at 1000x
 		buckets = append(buckets, BucketConfig{
 			Name:       "jackpot",
 			MinPayout:  1000,

@@ -5,25 +5,71 @@ on:
     branches: [main]
     paths:
       - "launcher/**"
+      - "frontend/**"
+      - "backend/**"
+      - "stakergs/**"
       - ".github/workflows/build-launcher.yml"
   pull_request:
     branches: [main]
     paths:
       - "launcher/**"
+      - "frontend/**"
+      - "backend/**"
+      - "stakergs/**"
   workflow_dispatch:
   release:
     types: [created]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
-  GO_VERSION: "1.24"
+  GO_VERSION: "1.23"
+  NODE_VERSION: "22"
+  PNPM_VERSION: "9"
   APP_NAME: mtools-launcher
 
 permissions:
   contents: write
 
 jobs:
-  # Native builds for maximum compatibility
-  build-native:
+  # Build frontend (universal - same for all platforms)
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: frontend
+        run: pnpm run build
+
+      - name: Upload frontend dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/build/
+          if-no-files-found: error
+
+  # Build backend for each platform
+  build-backend:
     strategy:
       fail-fast: false
       matrix:
@@ -31,14 +77,70 @@ jobs:
           - os: macos-14
             goos: darwin
             goarch: arm64
-            artifact: mtools-launcher-darwin-arm64
-          - os: ubuntu-latest
+          - os: macos-13
+            goos: darwin
+            goarch: amd64
+          - os: ubuntu-22.04
             goos: linux
             goarch: amd64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/go.sum
+
+      - name: Build backend
+        working-directory: backend
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-s -w" -o mtools-backend${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd
+
+      - name: Upload backend binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: backend/mtools-backend*
+          if-no-files-found: error
+
+  # Build launcher with bundled assets
+  build-launcher:
+    needs: [build-frontend, build-backend]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            goos: darwin
+            goarch: arm64
+            platform: darwin/arm64
+            artifact: mtools-launcher-darwin-arm64.app.zip
+          - os: macos-13
+            goos: darwin
+            goarch: amd64
+            platform: darwin/amd64
+            artifact: mtools-launcher-darwin-amd64.app.zip
+          - os: ubuntu-22.04
+            goos: linux
+            goarch: amd64
+            platform: linux/amd64
             artifact: mtools-launcher-linux-amd64
           - os: windows-latest
             goos: windows
             goarch: amd64
+            platform: windows/amd64
             artifact: mtools-launcher-windows-amd64.exe
 
     runs-on: ${{ matrix.os }}
@@ -53,78 +155,117 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: launcher/go.sum
 
-      # Linux dependencies for Fyne
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: launcher/ui/pnpm-lock.yaml
+
+      # Linux: Install WebKit2GTK
       - name: Install Linux dependencies
-        if: matrix.goos == 'linux'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libgl1-mesa-dev \
-            xorg-dev \
-            libxcursor-dev \
-            libxrandr-dev \
-            libxinerama-dev \
-            libxi-dev \
-            libxxf86vm-dev
+            libwebkit2gtk-4.0-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            build-essential \
+            pkg-config
 
-      - name: Build
+      # Install Wails CLI
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      # Create bundled directory
+      - name: Create bundled directory
         working-directory: launcher
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 1
+        run: mkdir -p bundled/frontend
+
+      # Download frontend dist
+      - name: Download frontend dist
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: launcher/bundled/frontend/
+
+      # Download backend binary for this platform
+      - name: Download backend binary
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: launcher/bundled/
+
+      # Rename backend binary
+      - name: Prepare backend binary (Unix)
+        if: runner.os != 'Windows'
+        working-directory: launcher/bundled
         run: |
-          go mod download
-          go build -ldflags="-s -w" -o ${{ matrix.artifact }} .
+          mv mtools-backend* backend 2>/dev/null || mv mtools-backend backend
+          chmod +x backend
+          ls -la
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: launcher/${{ matrix.artifact }}
-          if-no-files-found: error
+      - name: Prepare backend binary (Windows)
+        if: runner.os == 'Windows'
+        working-directory: launcher/bundled
+        shell: pwsh
+        run: |
+          if (Test-Path "mtools-backend.exe") {
+            Rename-Item "mtools-backend.exe" "backend"
+          } elseif (Test-Path "mtools-backend") {
+            Rename-Item "mtools-backend" "backend"
+          }
+          Get-ChildItem
 
-  # Cross-compilation using fyne-cross for ARM builds
-  build-cross:
-    runs-on: ubuntu-latest
+      # Install launcher UI dependencies
+      - name: Install launcher UI dependencies
+        working-directory: launcher/ui
+        run: pnpm install
 
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - goos: linux
-            goarch: arm64
-            artifact: mtools-launcher-linux-arm64
-          - goos: windows
-            goarch: arm64
-            artifact: mtools-launcher-windows-arm64.exe
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: launcher/go.sum
-
-      - name: Install fyne-cross
-        run: go install github.com/fyne-io/fyne-cross@latest
-
-      - name: Build with fyne-cross
+      # Build launcher with production tag
+      - name: Build launcher (Unix)
+        if: runner.os != 'Windows'
         working-directory: launcher
         run: |
-          fyne-cross ${{ matrix.goos }} -arch ${{ matrix.goarch }} -output ${{ env.APP_NAME }}
+          ~/go/bin/wails build -platform ${{ matrix.platform }} -ldflags="-s -w" -tags prod
 
-      - name: Prepare artifact
+      - name: Build launcher (Windows)
+        if: runner.os == 'Windows'
+        working-directory: launcher
+        shell: pwsh
         run: |
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            cp launcher/fyne-cross/bin/${{ matrix.goos }}-${{ matrix.goarch }}/${{ env.APP_NAME }}.exe launcher/${{ matrix.artifact }}
-          else
-            cp launcher/fyne-cross/bin/${{ matrix.goos }}-${{ matrix.goarch }}/${{ env.APP_NAME }} launcher/${{ matrix.artifact }}
-          fi
+          $env:PATH = "$env:USERPROFILE\go\bin;$env:PATH"
+          wails build -platform ${{ matrix.platform }} -ldflags="-s -w" -tags prod
 
+      # Package artifacts
+      - name: Package macOS app
+        if: runner.os == 'macOS'
+        working-directory: launcher
+        run: |
+          cd build/bin
+          zip -r ../../${{ matrix.artifact }} *.app
+
+      - name: Prepare Linux artifact
+        if: runner.os == 'Linux'
+        working-directory: launcher
+        run: |
+          cp build/bin/${{ env.APP_NAME }} ${{ matrix.artifact }}
+          chmod +x ${{ matrix.artifact }}
+
+      - name: Prepare Windows artifact
+        if: runner.os == 'Windows'
+        working-directory: launcher
+        shell: pwsh
+        run: |
+          Copy-Item "build\bin\${{ env.APP_NAME }}.exe" "${{ matrix.artifact }}"
+
+      # Upload final artifact
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -134,7 +275,7 @@ jobs:
 
   # Create release with all binaries
   release:
-    needs: [build-native, build-cross]
+    needs: [build-launcher]
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
 
@@ -143,10 +284,15 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          merge-multiple: true
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release
+          # Only copy final launcher artifacts, not intermediate ones
+          find artifacts -name "mtools-launcher-*" -type f -exec cp {} release/ \;
+          ls -la release/
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
-        if: github.ref_type == 'tag'
+          files: release/*

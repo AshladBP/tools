@@ -25,14 +25,15 @@ var ProfileDescriptions = map[PlayerProfile]string{
 
 // GeneratedConfig represents a generated bucket configuration
 type GeneratedConfig struct {
-	Profile     PlayerProfile  `json:"profile"`
-	ProfileName string         `json:"profile_name"`
-	Description string         `json:"description"`
-	TargetRTP   float64        `json:"target_rtp"`
-	MaxWin      float64        `json:"max_win"`
-	Buckets     []BucketConfig `json:"buckets"`
-	B64Config   string         `json:"b64_config"`
-	Stats       ConfigStats    `json:"stats"`
+	Profile     PlayerProfile   `json:"profile"`
+	ProfileName string          `json:"profile_name"`
+	Description string          `json:"description"`
+	TargetRTP   float64         `json:"target_rtp"`
+	MaxWin      float64         `json:"max_win"`
+	Buckets     []BucketConfig  `json:"buckets"`
+	B64Config   string          `json:"b64_config"`
+	Stats       ConfigStats     `json:"stats"`
+	Feasibility *FeasibilityInfo `json:"feasibility,omitempty"`
 }
 
 // ConfigStats provides statistical info about the generated config
@@ -62,11 +63,23 @@ type ShortConfig struct {
 }
 
 // ConfigGenerator generates optimal bucket configurations
-type ConfigGenerator struct{}
+type ConfigGenerator struct {
+	analyzer *ModeAnalyzer
+}
 
 // NewConfigGenerator creates a new config generator
 func NewConfigGenerator() *ConfigGenerator {
 	return &ConfigGenerator{}
+}
+
+// NewConfigGeneratorWithAnalyzer creates a config generator with mode analyzer
+func NewConfigGeneratorWithAnalyzer(analyzer *ModeAnalyzer) *ConfigGenerator {
+	return &ConfigGenerator{analyzer: analyzer}
+}
+
+// SetAnalyzer sets the mode analyzer for adaptive generation
+func (g *ConfigGenerator) SetAnalyzer(analyzer *ModeAnalyzer) {
+	g.analyzer = analyzer
 }
 
 // GenerateAllProfiles generates configs for all profiles
@@ -99,6 +112,9 @@ func (g *ConfigGenerator) GenerateConfig(targetRTP, maxWin float64, profile Play
 
 	// Generate buckets
 	buckets := g.generateBuckets(boundaries, rtpDistribution, targetRTP, profile)
+
+	// IMPORTANT: Always ensure maxwin is a separate bucket
+	buckets = ensureMaxWinBucket(buckets, maxWin)
 
 	// Calculate b64 config
 	b64Config := g.toB64Config(targetRTP, buckets)
@@ -343,6 +359,9 @@ func (g *ConfigGenerator) toB64Config(targetRTP float64, buckets []BucketConfig)
 		case ConstraintAuto:
 			typeInt = 2
 			value = b.AutoExponent
+		case ConstraintMaxWinFreq:
+			typeInt = 3
+			value = b.MaxWinFrequency
 		}
 
 		shortBuckets[i] = []any{b.MinPayout, b.MaxPayout, typeInt, value}
@@ -471,4 +490,116 @@ func ValidateGeneratedConfig(config *GeneratedConfig) error {
 	}
 
 	return nil
+}
+
+// GenerateAdaptiveConfig generates a config using LUT analysis for adaptive bucket generation
+// This method uses mode analysis to handle extreme RTP values and non-standard payout ranges
+func (g *ConfigGenerator) GenerateAdaptiveConfig(mode string, targetRTP, maxWin float64, profile PlayerProfile) (*GeneratedConfig, error) {
+	if g.analyzer == nil {
+		// Fallback to legacy generation
+		return g.GenerateConfig(targetRTP, maxWin, profile), nil
+	}
+
+	// Analyze the mode
+	analysis, err := g.analyzer.AnalyzeMode(mode, targetRTP)
+	if err != nil {
+		// Fallback to legacy generation on analysis failure
+		return g.GenerateConfig(targetRTP, maxWin, profile), nil
+	}
+
+	// Determine effective RTP (adjust if infeasible)
+	effectiveRTP := targetRTP
+	wasAdjusted := false
+
+	if !analysis.Feasible {
+		wasAdjusted = true
+		if targetRTP > analysis.MaxAchievableRTP {
+			effectiveRTP = analysis.MaxAchievableRTP * 0.95 // 95% of max
+		} else {
+			effectiveRTP = analysis.MinAchievableRTP * 1.05 // 105% of min
+		}
+	}
+
+	// Use actual max payout from analysis
+	actualMaxWin := analysis.MaxPayout
+	if actualMaxWin <= 0 {
+		actualMaxWin = maxWin
+	}
+
+	// Generate buckets from analysis
+	buckets := g.analyzer.CreateBucketsFromAnalysis(analysis, effectiveRTP, profile)
+
+	// Fallback if no buckets generated
+	if len(buckets) == 0 {
+		return g.GenerateConfig(effectiveRTP, actualMaxWin, profile), nil
+	}
+
+	// Create b64 config
+	b64Config := g.toB64Config(effectiveRTP, buckets)
+
+	// Calculate stats from generated buckets
+	rtpDist := make([]float64, len(buckets))
+	for i, b := range buckets {
+		if b.Type == ConstraintRTPPercent {
+			rtpDist[i] = b.RTPPercent
+		} else {
+			// Estimate for other types
+			rtpDist[i] = 100.0 / float64(len(buckets))
+		}
+	}
+	stats := g.calculateStats(buckets, rtpDist, effectiveRTP)
+
+	// Build feasibility info
+	feasibility := &FeasibilityInfo{
+		Original:    targetRTP,
+		Effective:   effectiveRTP,
+		WasAdjusted: wasAdjusted,
+		MinPossible: analysis.MinAchievableRTP,
+		MaxPossible: analysis.MaxAchievableRTP,
+	}
+
+	return &GeneratedConfig{
+		Profile:     profile,
+		ProfileName: g.getProfileName(profile),
+		Description: ProfileDescriptions[profile],
+		TargetRTP:   effectiveRTP,
+		MaxWin:      actualMaxWin,
+		Buckets:     buckets,
+		B64Config:   b64Config,
+		Stats:       stats,
+		Feasibility: feasibility,
+	}, nil
+}
+
+// GenerateAllAdaptiveProfiles generates adaptive configs for all profiles using mode analysis
+func (g *ConfigGenerator) GenerateAllAdaptiveProfiles(mode string, targetRTP float64) (*ConfigGeneratorResponse, error) {
+	profiles := []PlayerProfile{
+		ProfileLowVol,
+		ProfileMediumVol,
+		ProfileHighVol,
+	}
+
+	// Get max win from analysis if possible
+	var maxWin float64 = 5000 // Default
+	if g.analyzer != nil {
+		analysis, err := g.analyzer.AnalyzeMode(mode, targetRTP)
+		if err == nil {
+			maxWin = analysis.MaxPayout
+		}
+	}
+
+	response := &ConfigGeneratorResponse{
+		Configs: make([]GeneratedConfig, 0, len(profiles)),
+	}
+
+	for _, profile := range profiles {
+		config, err := g.GenerateAdaptiveConfig(mode, targetRTP, maxWin, profile)
+		if err != nil {
+			// Use legacy fallback
+			config = g.GenerateConfig(targetRTP, maxWin, profile)
+		}
+		response.Configs = append(response.Configs, *config)
+	}
+
+	return response, nil
 }

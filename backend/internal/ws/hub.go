@@ -27,6 +27,16 @@ const (
 	// LGS session messages
 	MsgLGSSessionUpdate  MessageType = "lgs_session_update"
 	MsgLGSSessionsUpdate MessageType = "lgs_sessions_update"
+
+	// LUT watcher messages
+	MsgLUTReloaded     MessageType = "lut_reloaded"
+	MsgWatcherEnabled  MessageType = "watcher_enabled"
+	MsgWatcherDisabled MessageType = "watcher_disabled"
+
+	// Optimizer progress messages
+	MsgOptimizerProgress MessageType = "optimizer_progress"
+	MsgOptimizerComplete MessageType = "optimizer_complete"
+	MsgOptimizerError    MessageType = "optimizer_error"
 )
 
 // Message represents a WebSocket message sent to clients.

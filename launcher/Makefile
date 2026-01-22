@@ -1,31 +1,60 @@
-.PHONY: build run clean install
+.PHONY: dev build build-release clean install generate setup bundle-dev
 
-# Default target
-all: build
+# Setup all dependencies
+setup:
+	cd ui && pnpm install
+	go mod tidy
 
-# Build the launcher
+# Development mode with hot reload
+dev:
+	~/go/bin/wails dev
+
+# Build production binary (requires bundled assets)
 build:
-	go build -o mtools-launcher .
+	~/go/bin/wails build -tags prod
 
-# Build optimized (smaller binary)
+# Build optimized production binary
 build-release:
-	go build -ldflags="-s -w" -o mtools-launcher .
+	~/go/bin/wails build -ldflags="-s -w" -tags prod
 
-# Run the launcher
-run: build
-	./mtools-launcher
+# Generate TypeScript bindings
+generate:
+	~/go/bin/wails generate module
+
+# Install UI dependencies
+install-ui:
+	cd ui && pnpm install
+
+# Build UI only
+build-ui:
+	cd ui && pnpm run build
+
+# Bundle assets for local production build
+bundle-dev:
+	@echo "Building and bundling assets for local production build..."
+	@mkdir -p bundled/frontend
+	@# Build frontend
+	cd ../frontend && pnpm install && pnpm run build
+	@cp -r ../frontend/build/* bundled/frontend/
+	@# Build backend
+	cd ../backend && go build -ldflags="-s -w" -o ../launcher/bundled/backend ./cmd
+	@chmod +x bundled/backend
+	@echo "Assets bundled. Run 'make build-release' to create production binary."
 
 # Clean build artifacts
 clean:
-	rm -f mtools-launcher
+	rm -rf build/bin
+	rm -rf ui/dist
+	rm -rf bundled
 
-# Install to /usr/local/bin
-install: build-release
-	cp mtools-launcher /usr/local/bin/
+# Clean everything including node_modules
+clean-all: clean
+	rm -rf ui/node_modules
 
-# Build for all platforms
-build-all:
-	GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o mtools-launcher-darwin-amd64 .
-	GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o mtools-launcher-darwin-arm64 .
-	GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o mtools-launcher-linux-amd64 .
-	GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o mtools-launcher-windows-amd64.exe .
+# Run Go mod tidy
+tidy:
+	go mod tidy
+
+# Build for all platforms (local, requires bundled assets)
+build-all: bundle-dev build-release
+	@echo "Production binary created at build/bin/"

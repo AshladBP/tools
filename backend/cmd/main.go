@@ -97,22 +97,31 @@ func generateAndSaveCert() (tls.Certificate, error) {
 }
 
 func main() {
-	indexPath := flag.String("index", "", "Path to index.json file (required)")
+	libraryPath := flag.String("library", "", "Path to library folder (required)")
 	port := flag.Int("port", 7754, "Server port (HTTP)")
 	httpsPort := flag.Int("https-port", 7755, "HTTPS port (0 to disable)")
+	convexURL := flag.String("convex-url", "", "URL of the Convex Optimizer Python service (e.g., http://localhost:7756)")
+	watch := flag.Bool("watch", false, "Enable auto-reload when CSV lookup tables change")
 	flag.Parse()
 
-	if *indexPath == "" {
-		fmt.Fprintln(os.Stderr, "Error: -index flag is required")
-		fmt.Fprintln(os.Stderr, "Usage: lutexplorer -index <path/to/index.json> [-port 7755] [-https-port 7756]")
+	// Check environment variable for convex URL if not provided via flag
+	if *convexURL == "" {
+		if envURL := os.Getenv("CONVEX_OPTIMIZER_URL"); envURL != "" {
+			*convexURL = envURL
+		}
+	}
+
+	if *libraryPath == "" {
+		fmt.Fprintln(os.Stderr, "Error: -library flag is required")
+		fmt.Fprintln(os.Stderr, "Usage: lutexplorer -library <path/to/library> [-port 7754] [-https-port 7755]")
 		os.Exit(1)
 	}
 
 	addr := fmt.Sprintf(":%d", *port)
 	httpsAddr := fmt.Sprintf(":%d", *httpsPort)
 
-	// Load index
-	loader := lut.NewLoader(*indexPath)
+	// Load index from library folder
+	loader := lut.NewLoaderFromLibrary(*libraryPath)
 	if err := loader.Load(); err != nil {
 		log.Fatalf("Failed to load index: %v", err)
 	}
@@ -136,25 +145,50 @@ func main() {
 	bgLoader.Start()
 	log.Println("Background loader started (low priority mode)")
 
-	// Create book watcher for auto-reload on file changes
-	bookFiles := bgLoader.GetBookFiles()
-	bookWatcher, err := watcher.NewBookWatcher(loader.BaseDir(), bookFiles, func(mode string) error {
-		log.Printf("Book file changed, reloading mode: %s", mode)
-		return bgLoader.ReloadMode(mode)
-	})
-	if err != nil {
-		log.Printf("Warning: Failed to create book watcher: %v", err)
-	} else {
-		if err := bookWatcher.Start(); err != nil {
-			log.Printf("Warning: Failed to start book watcher: %v", err)
+	// Create CSV watcher for auto-reload on file changes (optional)
+	var csvWatcher *watcher.FileWatcher
+	if *watch {
+		csvFiles := loader.GetCSVFiles()
+		var watcherErr error
+		csvWatcher, watcherErr = watcher.NewFileWatcher(loader.BaseDir(), csvFiles, func(mode string) error {
+			log.Printf("CSV file changed, reloading LUT for mode: %s", mode)
+			if reloadErr := loader.ReloadModeTable(mode); reloadErr != nil {
+				return reloadErr
+			}
+			// Broadcast to WebSocket clients
+			hub.Broadcast(ws.Message{
+				Type: ws.MsgLUTReloaded,
+				Payload: map[string]string{
+					"mode":    mode,
+					"message": "Lookup table reloaded",
+				},
+			})
+			return nil
+		})
+		if watcherErr != nil {
+			log.Printf("Warning: Failed to create CSV watcher: %v", watcherErr)
 		} else {
-			log.Println("Book watcher started (auto-reload on file changes)")
+			if startErr := csvWatcher.Start(); startErr != nil {
+				log.Printf("Warning: Failed to start CSV watcher: %v", startErr)
+			} else {
+				log.Println("CSV watcher started (auto-reload on lookup table changes)")
+			}
 		}
+	} else {
+		log.Println("CSV watcher disabled (use --watch to enable)")
 	}
 
 	// Create and configure server
-	server := api.NewServer(loader, addr, hub)
+	server := api.NewServer(loader, addr, hub, *convexURL)
 	server.SetBackgroundLoader(bgLoader)
+	server.SetCSVWatcher(csvWatcher)
+
+	// Log convex optimizer status
+	if *convexURL != "" {
+		log.Printf("Convex Optimizer proxy enabled: %s", *convexURL)
+	} else {
+		log.Println("Convex Optimizer proxy disabled (no -convex-url or CONVEX_OPTIMIZER_URL)")
+	}
 
 	// Handle graceful shutdown
 	go func() {
@@ -162,8 +196,8 @@ func main() {
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
 		log.Println("Shutting down...")
-		if bookWatcher != nil {
-			bookWatcher.Stop()
+		if csvWatcher != nil {
+			csvWatcher.Stop()
 		}
 		bgLoader.Stop()
 		os.Exit(0)

@@ -9,23 +9,28 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"lutexplorer/internal/common"
 	"lutexplorer/internal/lut"
 	"lutexplorer/internal/ws"
+
+	"github.com/gorilla/websocket"
 )
 
 // Handlers provides HTTP handlers for the optimizer API
 type Handlers struct {
-	loader *lut.Loader
-	wsHub  *ws.Hub
+	loader   *lut.Loader
+	wsHub    *ws.Hub
+	analyzer *ModeAnalyzer
 }
 
 // NewHandlers creates new optimizer HTTP handlers
 func NewHandlers(loader *lut.Loader, wsHub *ws.Hub) *Handlers {
 	return &Handlers{
-		loader: loader,
-		wsHub:  wsHub,
+		loader:   loader,
+		wsHub:    wsHub,
+		analyzer: NewModeAnalyzer(loader),
 	}
 }
 
@@ -287,11 +292,18 @@ func getModeNote(cost float64) string {
 
 // BucketOptimizeRequest is the API request for bucket-based optimization
 type BucketOptimizeRequest struct {
-	TargetRTP    float64        `json:"target_rtp"`    // Target RTP (e.g., 0.97)
-	RTPTolerance float64        `json:"rtp_tolerance"` // Tolerance (e.g., 0.001)
-	Buckets      []BucketConfig `json:"buckets"`       // Payout range configurations
-	SaveToFile   bool           `json:"save_to_file"`  // Save optimized weights to LUT file
-	CreateBackup bool           `json:"create_backup"` // Create backup before saving
+	TargetRTP           float64          `json:"target_rtp"`                      // Target RTP (e.g., 0.97)
+	RTPTolerance        float64          `json:"rtp_tolerance"`                   // Tolerance (e.g., 0.001)
+	Buckets             []BucketConfig   `json:"buckets"`                         // Payout range configurations
+	SaveToFile          bool             `json:"save_to_file"`                    // Save optimized weights to LUT file
+	CreateBackup        bool             `json:"create_backup"`                   // Create backup before saving
+	EnableBruteForce    bool             `json:"enable_brute_force,omitempty"`    // Enable iterative brute force search
+	MaxIterations       int              `json:"max_iterations,omitempty"`        // Max iterations for brute force
+	OptimizationMode    OptimizationMode `json:"optimization_mode,omitempty"`     // "fast"/"balanced"/"precise"
+	GlobalMaxWinFreq    float64          `json:"global_max_win_freq,omitempty"`   // Global max win frequency (1 in N)
+	EnableVoiding       bool             `json:"enable_voiding,omitempty"`        // DEPRECATED: Enable bucket voiding
+	VoidedBucketIndices []int            `json:"voided_bucket_indices,omitempty"` // DEPRECATED: Indices of buckets to void
+	EnableAutoVoiding   bool             `json:"enable_auto_voiding,omitempty"`   // Enable automatic outcome voiding to reach target RTP
 }
 
 // HandleBucketOptimize runs bucket-based optimization on a mode
@@ -346,18 +358,44 @@ func (h *Handlers) HandleBucketOptimize(w http.ResponseWriter, r *http.Request) 
 
 	// Create optimizer config
 	config := &BucketOptimizerConfig{
-		TargetRTP:    req.TargetRTP,
-		RTPTolerance: req.RTPTolerance,
-		Buckets:      buckets,
-		MinWeight:    1,
+		TargetRTP:           req.TargetRTP,
+		RTPTolerance:        req.RTPTolerance,
+		Buckets:             buckets,
+		MinWeight:           1,
+		EnableBruteForce:    req.EnableBruteForce,
+		MaxIterations:       req.MaxIterations,
+		OptimizationMode:    req.OptimizationMode,
+		GlobalMaxWinFreq:    req.GlobalMaxWinFreq,
+		EnableVoiding:       req.EnableVoiding,
+		VoidedBucketIndices: req.VoidedBucketIndices,
+		EnableAutoVoiding:   req.EnableAutoVoiding,
 	}
-	optimizer := NewBucketOptimizer(config)
 
-	// Run optimization
-	result, err := optimizer.OptimizeTable(table)
-	if err != nil {
-		common.WriteError(w, http.StatusInternalServerError, err.Error())
-		return
+	var result *BucketOptimizerResult
+	var bruteForceResult *BruteForceResult
+
+	// Run optimization - use brute force if enabled
+	if req.EnableBruteForce {
+		// Validate brute force config
+		if err := ValidateBruteForceConfig(config); err != nil {
+			common.WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid brute force config: %s", err.Error()))
+			return
+		}
+
+		bruteForceOpt := NewBruteForceOptimizer(config, nil) // No progress channel for HTTP
+		bruteForceResult, err = bruteForceOpt.OptimizeTable(table)
+		if err != nil {
+			common.WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		result = bruteForceResult.BucketOptimizerResult
+	} else {
+		optimizer := NewBucketOptimizer(config)
+		result, err = optimizer.OptimizeTable(table)
+		if err != nil {
+			common.WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 
 	// Save if requested
@@ -382,12 +420,21 @@ func (h *Handlers) HandleBucketOptimize(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Get mode cost for context
+	// Get mode cost and max payout for context
 	cost := table.Cost
 	if cost <= 0 {
 		cost = 1.0
 	}
 	isBonusMode := cost > 1.5
+
+	// Find max payout (normalized by cost)
+	var maxPayout float64
+	for _, outcome := range table.Outcomes {
+		payout := float64(outcome.Payout) / 100.0 / cost
+		if payout > maxPayout {
+			maxPayout = payout
+		}
+	}
 
 	// Build response
 	response := map[string]interface{}{
@@ -404,11 +451,29 @@ func (h *Handlers) HandleBucketOptimize(w http.ResponseWriter, r *http.Request) 
 			"cost":          cost,
 			"is_bonus_mode": isBonusMode,
 			"note":          getModeNote(cost),
+			"max_payout":    maxPayout,
 		},
 		"config": map[string]interface{}{
-			"target_rtp": req.TargetRTP,
-			"buckets":    buckets,
+			"target_rtp":         req.TargetRTP,
+			"buckets":            buckets,
+			"enable_brute_force": req.EnableBruteForce,
+			"optimization_mode":  req.OptimizationMode,
+			"enable_voiding":     req.EnableVoiding,
 		},
+	}
+
+	// Add voided buckets info if any
+	if len(result.VoidedBuckets) > 0 {
+		response["voided_buckets"] = result.VoidedBuckets
+	}
+
+	// Add brute force specific info if used
+	if bruteForceResult != nil {
+		response["brute_force_info"] = map[string]interface{}{
+			"iterations":      bruteForceResult.Iterations,
+			"search_duration": bruteForceResult.SearchDuration,
+			"final_error":     bruteForceResult.FinalError,
+		}
 	}
 
 	if saveInfo != nil {
@@ -533,8 +598,44 @@ func (h *Handlers) HandleSuggestBuckets(w http.ResponseWriter, r *http.Request) 
 			"cost":          cost,
 			"is_bonus_mode": isBonusMode,
 			"note":          getModeNote(cost),
+			"max_payout":    maxPayout,
 		},
 	})
+}
+
+// ============================================================================
+// Mode Analysis Endpoints
+// ============================================================================
+
+// HandleAnalyzeMode analyzes a mode's LUT and returns RTP boundaries and recommendations
+// GET /api/optimizer/{mode}/analyze?target_rtp=0.96
+func (h *Handlers) HandleAnalyzeMode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		common.WriteError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+
+	mode := extractMode(r.URL.Path, "analyze")
+	if mode == "" {
+		common.WriteError(w, http.StatusBadRequest, "mode required")
+		return
+	}
+
+	// Parse target RTP from query (default 0.96, but allow higher values for extreme modes)
+	targetRTP := 0.96
+	if rtpStr := r.URL.Query().Get("target_rtp"); rtpStr != "" {
+		if parsed, err := strconv.ParseFloat(rtpStr, 64); err == nil && parsed > 0 {
+			targetRTP = parsed
+		}
+	}
+
+	analysis, err := h.analyzer.AnalyzeMode(mode, targetRTP)
+	if err != nil {
+		common.WriteError(w, http.StatusNotFound, fmt.Sprintf("failed to analyze mode: %s", err.Error()))
+		return
+	}
+
+	common.WriteSuccess(w, analysis)
 }
 
 // ============================================================================
@@ -615,6 +716,7 @@ func (h *Handlers) HandleGenerateConfig(w http.ResponseWriter, r *http.Request) 
 }
 
 // HandleGenerateConfigsForMode generates configs based on a mode's actual max payout
+// Uses adaptive generation with LUT analysis for extreme RTP modes
 // GET /api/optimizer/{mode}/generate-configs?target_rtp=0.96
 func (h *Handlers) HandleGenerateConfigsForMode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -628,7 +730,7 @@ func (h *Handlers) HandleGenerateConfigsForMode(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Load table to get actual max payout
+	// Load table to get actual max payout and current RTP
 	table, err := h.loader.GetMode(mode)
 	if err != nil {
 		common.WriteError(w, http.StatusNotFound, fmt.Sprintf("mode not found: %s", mode))
@@ -648,25 +750,78 @@ func (h *Handlers) HandleGenerateConfigsForMode(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	// Parse target RTP from query
+	// Parse target RTP from query (allow values > 1 for extreme modes)
 	targetRTP := 0.96
 	if rtpStr := r.URL.Query().Get("target_rtp"); rtpStr != "" {
-		if parsed, err := strconv.ParseFloat(rtpStr, 64); err == nil && parsed > 0 && parsed <= 1 {
+		if parsed, err := strconv.ParseFloat(rtpStr, 64); err == nil && parsed > 0 {
 			targetRTP = parsed
 		}
 	}
 
-	generator := NewConfigGenerator()
-	response := generator.GenerateAllProfiles(targetRTP, maxPayout)
+	// Use adaptive generation with analyzer
+	generator := NewConfigGeneratorWithAnalyzer(h.analyzer)
+	response, genErr := generator.GenerateAllAdaptiveProfiles(mode, targetRTP)
 
-	// Add mode-specific info
-	common.WriteSuccess(w, map[string]interface{}{
+	// Fallback to legacy generation on error
+	if genErr != nil || response == nil {
+		generator := NewConfigGenerator()
+		legacyResponse := generator.GenerateAllProfiles(targetRTP, maxPayout)
+		response = legacyResponse
+	}
+
+	// Get analysis for additional info
+	analysis, _ := h.analyzer.AnalyzeMode(mode, targetRTP)
+
+	// Build response with mode-specific info
+	responseData := map[string]interface{}{
 		"mode":        mode,
 		"max_payout":  maxPayout,
 		"target_rtp":  targetRTP,
 		"current_rtp": table.RTP(),
 		"configs":     response.Configs,
-	})
+	}
+
+	// Include analysis info if available
+	if analysis != nil {
+		analysisData := map[string]interface{}{
+			"mode_type":          analysis.Type,
+			"feasible":           analysis.Feasible,
+			"feasibility_note":   analysis.FeasibilityNote,
+			"min_achievable_rtp": analysis.MinAchievableRTP,
+			"max_achievable_rtp": analysis.MaxAchievableRTP,
+			"suggested_rtp":      analysis.SuggestedRTP,
+			"is_bonus_mode":      analysis.IsBonusMode,
+		}
+
+		// Calculate void suggestions if RTP is not feasible
+		if !analysis.Feasible && analysis.MinAchievableRTP > targetRTP {
+			// Get payouts from table
+			cost := table.Cost
+			if cost <= 0 {
+				cost = 1.0
+			}
+			payouts := make([]float64, len(table.Outcomes))
+			for i, outcome := range table.Outcomes {
+				payouts[i] = float64(outcome.Payout) / 100.0 / cost
+			}
+
+			// Get buckets from response if available
+			var buckets []BucketConfig
+			if len(response.Configs) > 0 {
+				buckets = response.Configs[0].Buckets
+			}
+
+			// Calculate suggestions
+			voidSuggestions := CalculateVoidSuggestions(buckets, payouts, targetRTP, analysis.MinAchievableRTP)
+			if len(voidSuggestions) > 0 {
+				analysisData["suggested_void_buckets"] = voidSuggestions
+			}
+		}
+
+		responseData["analysis"] = analysisData
+	}
+
+	common.WriteSuccess(w, responseData)
 }
 
 // HandleProfiles returns available player profiles
@@ -698,6 +853,290 @@ func (h *Handlers) HandleProfiles(w http.ResponseWriter, r *http.Request) {
 	common.WriteSuccess(w, profiles)
 }
 
+// WebSocket upgrader for optimizer streaming
+var wsUpgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Allow all origins for development
+	},
+}
+
+// WSProgressMessage is the WebSocket message format for optimization progress
+type WSProgressMessage struct {
+	Type       string  `json:"type"`        // "progress" | "result" | "error"
+	Phase      string  `json:"phase"`       // "init" | "search" | "refine" | "complete"
+	Iteration  int     `json:"iteration"`   // Current iteration
+	MaxIter    int     `json:"max_iter"`    // Maximum iterations
+	CurrentRTP float64 `json:"current_rtp"` // Current RTP
+	TargetRTP  float64 `json:"target_rtp"`  // Target RTP
+	Error      float64 `json:"error"`       // Current error
+	Converged  bool    `json:"converged"`   // Whether converged
+	ElapsedMs  int64   `json:"elapsed_ms"`  // Elapsed time
+}
+
+// WSResultMessage is the WebSocket message for final result
+type WSResultMessage struct {
+	Type   string      `json:"type"` // "result"
+	Result interface{} `json:"result"`
+}
+
+// WSErrorMessage is the WebSocket message for errors
+type WSErrorMessage struct {
+	Type    string `json:"type"` // "error"
+	Message string `json:"message"`
+}
+
+// HandleBruteForceOptimizeWS handles WebSocket connection for brute force optimization with streaming progress
+// WS /api/optimizer/{mode}/optimize-stream
+func (h *Handlers) HandleBruteForceOptimizeWS(w http.ResponseWriter, r *http.Request) {
+	mode := extractMode(r.URL.Path, "optimize-stream")
+	if mode == "" {
+		common.WriteError(w, http.StatusBadRequest, "mode required")
+		return
+	}
+
+	// Upgrade to WebSocket
+	conn, err := wsUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	// Read config from first message
+	_, message, err := conn.ReadMessage()
+	if err != nil {
+		return
+	}
+
+	var req BucketOptimizeRequest
+	if err := json.Unmarshal(message, &req); err != nil {
+		conn.WriteJSON(WSErrorMessage{Type: "error", Message: "invalid request: " + err.Error()})
+		return
+	}
+
+	// Apply defaults
+	if req.TargetRTP <= 0 {
+		req.TargetRTP = 0.97
+	}
+	if req.RTPTolerance <= 0 {
+		req.RTPTolerance = 0.0001 // Higher precision for brute force
+	}
+
+	// Load table
+	table, err := h.loader.GetMode(mode)
+	if err != nil {
+		conn.WriteJSON(WSErrorMessage{Type: "error", Message: "mode not found: " + mode})
+		return
+	}
+
+	// Validate and prepare buckets
+	buckets := req.Buckets
+	if len(buckets) > 0 {
+		if err := ValidateBuckets(buckets); err != nil {
+			conn.WriteJSON(WSErrorMessage{Type: "error", Message: "invalid buckets: " + err.Error()})
+			return
+		}
+	} else {
+		buckets = SuggestBuckets(table, req.TargetRTP)
+	}
+
+	// Create optimizer config
+	config := &BucketOptimizerConfig{
+		TargetRTP:           req.TargetRTP,
+		RTPTolerance:        req.RTPTolerance,
+		Buckets:             buckets,
+		MinWeight:           1,
+		EnableBruteForce:    true, // Always true for WS endpoint
+		MaxIterations:       req.MaxIterations,
+		OptimizationMode:    req.OptimizationMode,
+		GlobalMaxWinFreq:    req.GlobalMaxWinFreq,
+		EnableVoiding:       req.EnableVoiding,
+		VoidedBucketIndices: req.VoidedBucketIndices,
+	}
+
+	// Validate config
+	if err := ValidateBruteForceConfig(config); err != nil {
+		conn.WriteJSON(WSErrorMessage{Type: "error", Message: "invalid config: " + err.Error()})
+		return
+	}
+
+	// Create channels
+	progressChan := make(chan BruteForceProgress, 100)
+	stopChan := make(chan struct{})
+	defer close(progressChan)
+
+	// Start goroutine to listen for stop messages from client
+	go func() {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return // Connection closed
+			}
+			// Check if it's a stop command
+			var cmd struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(msg, &cmd) == nil && cmd.Type == "stop" {
+				close(stopChan)
+				return
+			}
+		}
+	}()
+
+	// Start optimization in goroutine
+	resultChan := make(chan *BruteForceResult, 1)
+	errChan := make(chan error, 1)
+	startTime := time.Now()
+
+	go func() {
+		optimizer := NewBruteForceOptimizerWithStop(config, progressChan, stopChan)
+		result, err := optimizer.OptimizeTable(table)
+		if err != nil {
+			errChan <- err
+			return
+		}
+		resultChan <- result
+	}()
+
+	// Stream progress updates
+	for {
+		select {
+		case progress := <-progressChan:
+			msg := WSProgressMessage{
+				Type:       "progress",
+				Phase:      progress.Phase,
+				Iteration:  progress.Iteration,
+				MaxIter:    progress.MaxIter,
+				CurrentRTP: progress.CurrentRTP,
+				TargetRTP:  progress.TargetRTP,
+				Error:      progress.Error,
+				Converged:  progress.Converged,
+				ElapsedMs:  time.Since(startTime).Milliseconds(),
+			}
+			if err := conn.WriteJSON(msg); err != nil {
+				return
+			}
+
+			// Broadcast to all WebSocket clients via hub
+			if h.wsHub != nil {
+				h.wsHub.Broadcast(ws.Message{
+					Type: ws.MsgOptimizerProgress,
+					Mode: mode,
+					Payload: map[string]interface{}{
+						"phase":       progress.Phase,
+						"iteration":   progress.Iteration,
+						"max_iter":    progress.MaxIter,
+						"current_rtp": progress.CurrentRTP,
+						"target_rtp":  progress.TargetRTP,
+						"error":       progress.Error,
+						"converged":   progress.Converged,
+					},
+				})
+			}
+
+		case result := <-resultChan:
+			// Save if requested
+			var saveInfo map[string]interface{}
+			if req.SaveToFile && result.NewWeights != nil {
+				if req.CreateBackup {
+					backupPath, err := h.loader.SaveWeightsWithBackup(mode, result.NewWeights)
+					if err != nil {
+						conn.WriteJSON(WSErrorMessage{Type: "error", Message: "save failed: " + err.Error()})
+						return
+					}
+					saveInfo = map[string]interface{}{
+						"saved":       true,
+						"backup_path": backupPath,
+					}
+				} else {
+					if err := h.loader.SaveWeights(mode, result.NewWeights); err != nil {
+						conn.WriteJSON(WSErrorMessage{Type: "error", Message: "save failed: " + err.Error()})
+						return
+					}
+					saveInfo = map[string]interface{}{"saved": true}
+				}
+			}
+
+			// Get mode cost and max payout for context
+			cost := table.Cost
+			if cost <= 0 {
+				cost = 1.0
+			}
+			isBonusMode := cost > 1.5
+
+			// Find max payout (normalized by cost)
+			var maxPayout float64
+			for _, outcome := range table.Outcomes {
+				payout := float64(outcome.Payout) / 100.0 / cost
+				if payout > maxPayout {
+					maxPayout = payout
+				}
+			}
+
+			// Build response
+			response := map[string]interface{}{
+				"original_rtp":   result.OriginalRTP,
+				"final_rtp":      result.FinalRTP,
+				"target_rtp":     result.TargetRTP,
+				"converged":      result.Converged,
+				"total_weight":   result.TotalWeight,
+				"bucket_results": result.BucketResults,
+				"loss_result":    result.LossResult,
+				"warnings":       result.Warnings,
+				"mode_info": map[string]interface{}{
+					"cost":          cost,
+					"is_bonus_mode": isBonusMode,
+					"note":          getModeNote(cost),
+					"max_payout":    maxPayout,
+				},
+				"brute_force_info": map[string]interface{}{
+					"iterations":      result.Iterations,
+					"search_duration": result.SearchDuration,
+					"final_error":     result.FinalError,
+				},
+			}
+			if saveInfo != nil {
+				response["save_result"] = saveInfo
+			}
+			// Add voided buckets info if any
+			if len(result.VoidedBuckets) > 0 {
+				response["voided_buckets"] = result.VoidedBuckets
+			}
+
+			conn.WriteJSON(WSResultMessage{Type: "result", Result: response})
+
+			// Broadcast completion
+			if h.wsHub != nil {
+				h.wsHub.Broadcast(ws.Message{
+					Type: ws.MsgOptimizerComplete,
+					Mode: mode,
+					Payload: map[string]interface{}{
+						"final_rtp":  result.FinalRTP,
+						"target_rtp": result.TargetRTP,
+						"converged":  result.Converged,
+						"iterations": result.Iterations,
+					},
+				})
+			}
+			return
+
+		case err := <-errChan:
+			conn.WriteJSON(WSErrorMessage{Type: "error", Message: err.Error()})
+			if h.wsHub != nil {
+				h.wsHub.Broadcast(ws.Message{
+					Type: ws.MsgOptimizerError,
+					Mode: mode,
+					Payload: map[string]interface{}{
+						"error": err.Error(),
+					},
+				})
+			}
+			return
+		}
+	}
+}
+
 // RegisterRoutes registers all optimizer routes
 func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/optimizer/", func(w http.ResponseWriter, r *http.Request) {
@@ -712,9 +1151,15 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 		case strings.HasSuffix(path, "/restore"):
 			h.HandleRestore(w, r)
 
+		// Mode analysis endpoint
+		case strings.HasSuffix(path, "/analyze"):
+			h.HandleAnalyzeMode(w, r)
+
 		// Bucket optimizer endpoints
 		case strings.HasSuffix(path, "/bucket-optimize"):
 			h.HandleBucketOptimize(w, r)
+		case strings.HasSuffix(path, "/optimize-stream"):
+			h.HandleBruteForceOptimizeWS(w, r)
 		case strings.HasSuffix(path, "/suggest-buckets"):
 			h.HandleSuggestBuckets(w, r)
 		case path == "/api/optimizer/bucket-presets":

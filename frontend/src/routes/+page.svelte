@@ -12,6 +12,7 @@
 		BooksLoadingPanel,
 		LGSPanel,
 		OptimizerPanel,
+		// ConvexOptimizerPanel, // TODO: temporarily disabled, will be enabled later
 		WelcomeModal
 	} from '$lib/components';
 
@@ -34,6 +35,7 @@
 	let reloadKey = $state(0);
 
 	// Active panel for detailed view
+	// Note: 'convexopt' temporarily disabled, will be enabled later
 	type PanelType = 'overview' | 'distribution' | 'compliance' | 'crowdsim' | 'optimizer' | 'lgs';
 	const validPanels: PanelType[] = ['overview', 'distribution', 'compliance', 'crowdsim', 'optimizer', 'lgs'];
 	let activePanel = $state<PanelType>('overview');
@@ -146,7 +148,7 @@
 	// Derived data for dashboard
 	let currentModeInfo = $derived(indexInfo?.modes.find((m) => m.mode === selectedMode));
 	let currentCompareItem = $derived(compareItems.find((c) => c.mode === selectedMode));
-	let volatilityInfo = $derived(stats ? getVolatilityInfo(stats.volatility) : null);
+	let volatilityInfo = $derived(stats ? getVolatilityInfo(stats) : null);
 
 	function formatPercent(value: number): string {
 		return (value * 100).toFixed(2) + '%';
@@ -156,20 +158,69 @@
 		return value.toFixed(0) + 'x';
 	}
 
-	function getVolatilityInfo(vol: number): { label: string; color: string; textClass: string; glowClass: string } {
-		if (vol < 3) return { label: 'LOW', color: 'emerald', textClass: 'text-[var(--color-emerald)]', glowClass: 'glow-emerald' };
-		if (vol < 7) return { label: 'MEDIUM', color: 'gold', textClass: 'text-[var(--color-gold)]', glowClass: 'glow-gold' };
-		if (vol < 15) return { label: 'HIGH', color: 'coral', textClass: 'text-[var(--color-coral)]', glowClass: 'glow-coral' };
-		return { label: 'EXTREME', color: 'coral', textClass: 'text-[var(--color-coral)]', glowClass: 'glow-coral' };
+	type VolatilityInfo = {
+		label: string;
+		color: string;
+		textClass: string;
+		glowClass: string;
+		displayValue: number;
+		isBonusMode: boolean;
+		breakevenRate?: number;
+	};
+
+	// Simple volatility label for mode cards (no breakeven data available)
+	function getVolatilityLabel(vol: number, cost: number): { label: string; color: string } {
+		// For bonus modes, show "BONUS" badge instead of misleading volatility
+		if (cost > 1) {
+			return { label: 'BONUS', color: 'violet' };
+		}
+		// For base mode, use traditional CV-based classification
+		if (vol < 3) return { label: 'LOW', color: 'emerald' };
+		if (vol < 7) return { label: 'MEDIUM', color: 'gold' };
+		if (vol < 15) return { label: 'HIGH', color: 'coral' };
+		return { label: 'EXTREME', color: 'coral' };
+	}
+
+	function getVolatilityInfo(s: typeof stats): VolatilityInfo {
+		if (!s) return { label: 'N/A', color: 'gray', textClass: 'text-gray-400', glowClass: '', displayValue: 0, isBonusMode: false };
+
+		const isBonusMode = s.cost > 1;
+
+		// For bonus modes with cost > 1, use breakeven rate for classification
+		// This is the REAL volatility indicator - how often do you get your money back?
+		if (isBonusMode) {
+			const br = s.breakeven_rate;
+			let result: VolatilityInfo;
+
+			if (br >= 0.50) {
+				result = { label: 'LOW', color: 'emerald', textClass: 'text-[var(--color-emerald)]', glowClass: 'glow-emerald', displayValue: s.cost_adj_volatility, isBonusMode: true, breakevenRate: br };
+			} else if (br >= 0.30) {
+				result = { label: 'MEDIUM', color: 'gold', textClass: 'text-[var(--color-gold)]', glowClass: 'glow-gold', displayValue: s.cost_adj_volatility, isBonusMode: true, breakevenRate: br };
+			} else if (br >= 0.15) {
+				result = { label: 'HIGH', color: 'coral', textClass: 'text-[var(--color-coral)]', glowClass: 'glow-coral', displayValue: s.cost_adj_volatility, isBonusMode: true, breakevenRate: br };
+			} else {
+				result = { label: 'EXTREME', color: 'coral', textClass: 'text-[var(--color-coral)]', glowClass: 'glow-coral', displayValue: s.cost_adj_volatility, isBonusMode: true, breakevenRate: br };
+			}
+			return result;
+		}
+
+		// For base mode (cost = 1), use traditional CV-based classification
+		const vol = s.volatility;
+		if (vol < 3) return { label: 'LOW', color: 'emerald', textClass: 'text-[var(--color-emerald)]', glowClass: 'glow-emerald', displayValue: vol, isBonusMode: false };
+		if (vol < 7) return { label: 'MEDIUM', color: 'gold', textClass: 'text-[var(--color-gold)]', glowClass: 'glow-gold', displayValue: vol, isBonusMode: false };
+		if (vol < 15) return { label: 'HIGH', color: 'coral', textClass: 'text-[var(--color-coral)]', glowClass: 'glow-coral', displayValue: vol, isBonusMode: false };
+		return { label: 'EXTREME', color: 'coral', textClass: 'text-[var(--color-coral)]', glowClass: 'glow-coral', displayValue: vol, isBonusMode: false };
 	}
 
 	// Tab configuration
+	// Note: 'convexopt' tab temporarily disabled, will be enabled later
 	const tabs = [
 		{ id: 'overview', label: 'OVERVIEW', icon: 'grid', badge: null },
 		{ id: 'distribution', label: 'DISTRIBUTION', icon: 'chart', badge: null },
 		{ id: 'compliance', label: 'COMPLIANCE', icon: 'shield', badge: null },
 		{ id: 'crowdsim', label: 'CROWD SIM', icon: 'users', badge: null },
 		{ id: 'optimizer', label: 'OPTIMIZER', icon: 'bolt', badge: 'beta' },
+		// { id: 'convexopt', label: 'CONVEX', icon: 'puzzle', badge: 'new' },
 		{ id: 'lgs', label: 'LGS', icon: 'server', badge: null }
 	] as const;
 </script>
@@ -293,7 +344,7 @@
 						{#each indexInfo.modes as mode, i}
 							{@const isSelected = selectedMode === mode.mode}
 							{@const modeVol = compareItems.find(c => c.mode === mode.mode)?.volatility ?? 5}
-							{@const volInfo = getVolatilityInfo(modeVol)}
+							{@const volLabel = getVolatilityLabel(modeVol, mode.cost)}
 							<button
 								class="mode-btn text-left group {isSelected ? 'active' : ''}"
 								onclick={() => selectMode(mode.mode)}
@@ -301,7 +352,7 @@
 							>
 								<div class="flex items-center justify-between mb-3">
 									<span class="font-display text-lg text-[var(--color-light)] tracking-wide uppercase">{mode.mode}</span>
-									<span class="badge badge-{volInfo.color} text-[10px]">{volInfo.label}</span>
+									<span class="badge badge-{volLabel.color} text-[10px]">{volLabel.label}</span>
 								</div>
 
 								<div class="grid grid-cols-2 gap-x-4 gap-y-2 text-xs font-mono">
@@ -394,14 +445,28 @@
 									<div class="relative">
 										<div class="flex items-center justify-between mb-2">
 											<div>
-												<p class="text-[10px] font-mono {volatilityInfo.textClass} tracking-widest">VOLATILITY</p>
-												<p class="font-display text-2xl text-[var(--color-light)] leading-tight">{stats.volatility.toFixed(2)}</p>
+												<p class="text-[10px] font-mono {volatilityInfo.textClass} tracking-widest">
+													{volatilityInfo.isBonusMode ? 'VOLATILITY (cost-adj)' : 'VOLATILITY'}
+												</p>
+												<p class="font-display text-2xl text-[var(--color-light)] leading-tight">{volatilityInfo.displayValue.toFixed(2)}</p>
 											</div>
 											<span class="text-[9px] font-mono font-bold {volatilityInfo.textClass} px-1.5 py-0.5 rounded bg-[var(--color-{volatilityInfo.color})]/10">{volatilityInfo.label}</span>
 										</div>
-										<!-- Mini meter -->
+										{#if volatilityInfo.isBonusMode && volatilityInfo.breakevenRate !== undefined}
+											<!-- Breakeven rate for bonus modes -->
+											<div class="flex items-center justify-between text-xs mb-2">
+												<span class="text-[var(--color-mist)]">Breakeven rate</span>
+												<span class="{volatilityInfo.textClass} font-mono">{(volatilityInfo.breakevenRate * 100).toFixed(1)}%</span>
+											</div>
+										{/if}
+										<!-- Mini meter - based on breakeven rate for bonus, volatility for base -->
 										<div class="h-1 rounded-full bg-[var(--color-slate)] overflow-hidden">
-											<div class="h-full rounded-full" style="width: {Math.min(stats.volatility / 20 * 100, 100)}%; background: linear-gradient(90deg, var(--color-emerald), var(--color-gold), var(--color-coral));"></div>
+											{#if volatilityInfo.isBonusMode && volatilityInfo.breakevenRate !== undefined}
+												<!-- Inverted: higher breakeven = greener (better) -->
+												<div class="h-full rounded-full" style="width: {volatilityInfo.breakevenRate * 100}%; background: linear-gradient(90deg, var(--color-coral), var(--color-gold), var(--color-emerald));"></div>
+											{:else}
+												<div class="h-full rounded-full" style="width: {Math.min(volatilityInfo.displayValue / 20 * 100, 100)}%; background: linear-gradient(90deg, var(--color-emerald), var(--color-gold), var(--color-coral));"></div>
+											{/if}
 										</div>
 									</div>
 								</div>
@@ -462,6 +527,24 @@
 											<div class="text-xs font-mono text-[var(--color-mist)] mb-1">MIN</div>
 											<div class="font-mono text-xl text-[var(--color-mist)]">{stats.min_payout.toFixed(2)}x</div>
 										</div>
+										{#if stats.cost > 1}
+											<!-- Cost-adjusted metrics for bonus modes -->
+											<div class="data-cell rounded-xl p-4 border border-[var(--color-gold)]/20">
+												<div class="text-xs font-mono text-[var(--color-gold)] mb-1">COST</div>
+												<div class="font-mono text-xl text-[var(--color-gold)]">{stats.cost.toFixed(0)}x</div>
+											</div>
+											<div class="data-cell rounded-xl p-4 border border-[var(--color-gold)]/20">
+												<div class="text-xs font-mono text-[var(--color-gold)] mb-1">BREAKEVEN</div>
+												<div class="font-mono text-xl {stats.breakeven_rate >= 0.3 ? 'text-[var(--color-emerald)]' : stats.breakeven_rate >= 0.15 ? 'text-[var(--color-gold)]' : 'text-[var(--color-coral)]'}">{(stats.breakeven_rate * 100).toFixed(1)}%</div>
+											</div>
+											<div class="data-cell rounded-xl p-4 border border-[var(--color-gold)]/20">
+												<div class="text-xs font-mono text-[var(--color-gold)] mb-1">EV vs COST</div>
+												{#if true}
+													{@const evRatio = (stats.mean_payout / stats.cost - 1) * 100}
+													<div class="font-mono text-xl {evRatio >= 0 ? 'text-[var(--color-emerald)]' : 'text-[var(--color-coral)]'}">{evRatio >= 0 ? '+' : ''}{evRatio.toFixed(1)}%</div>
+												{/if}
+											</div>
+										{/if}
 									</div>
 								</div>
 

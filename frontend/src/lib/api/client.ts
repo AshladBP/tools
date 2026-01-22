@@ -27,7 +27,13 @@ import type {
 	CrowdSimPresetInfo,
 	OptimizerConfig,
 	OptimizerResult,
-	BucketDistributionResponse
+	BucketDistributionResponse,
+	ConvexOptimizeRequest,
+	ConvexOptimizeResponse,
+	ConvexHealthResponse,
+	ConvexModeInfoResponse,
+	ModeAnalysis,
+	GenerateConfigsAnalysis
 } from './types';
 
 const DEFAULT_BASE_URL = 'http://localhost:7754';
@@ -414,6 +420,17 @@ class LutApiClient {
 		});
 	}
 
+	// ============ Mode Analysis Methods ============
+
+	/**
+	 * Analyze a mode's LUT and return RTP boundaries and recommendations
+	 * Useful for understanding what RTP values are achievable for a mode
+	 */
+	async analyzeMode(mode: string, targetRtp?: number): Promise<ModeAnalysis> {
+		const params = targetRtp ? `?target_rtp=${targetRtp}` : '';
+		return this.fetch(`/api/optimizer/${encodeURIComponent(mode)}/analyze${params}`);
+	}
+
 	// ============ Bucket Optimizer Methods ============
 
 	/**
@@ -427,10 +444,12 @@ class LutApiClient {
 			name: string;
 			min_payout: number;
 			max_payout: number;
-			type: 'frequency' | 'rtp_percent' | 'auto';
+			type: 'frequency' | 'rtp_percent' | 'auto' | 'max_win_freq';
 			frequency?: number;
 			rtp_percent?: number;
 			auto_exponent?: number;
+			is_maxwin_bucket?: boolean;
+			max_win_frequency?: number;
 		}>;
 		save_to_file?: boolean;
 		create_backup?: boolean;
@@ -486,6 +505,7 @@ class LutApiClient {
 			type: 'frequency' | 'rtp_percent';
 			frequency?: number;
 			rtp_percent?: number;
+			is_maxwin_bucket?: boolean;
 		}>;
 		table_stats: {
 			outcome_count: number;
@@ -493,6 +513,12 @@ class LutApiClient {
 			min_payout: number;
 			payout_counts: Record<string, number>;
 			current_rtp: number;
+		};
+		mode_info?: {
+			cost: number;
+			is_bonus_mode: boolean;
+			note: string;
+			max_payout?: number;
 		};
 	}> {
 		const params = targetRtp ? `?target_rtp=${targetRtp}` : '';
@@ -511,6 +537,40 @@ class LutApiClient {
 		rtp_percent?: number;
 	}>>> {
 		return this.fetch('/api/optimizer/bucket-presets');
+	}
+
+	// ============ Convex Optimizer Methods (CVXPY-based) ============
+
+	/**
+	 * Check if Convex Optimizer service is available
+	 */
+	async convexHealth(): Promise<ConvexHealthResponse> {
+		return this.fetch('/api/convexopt/health');
+	}
+
+	/**
+	 * Get mode information for Convex Optimizer (criteria names, files, etc.)
+	 */
+	async convexModeInfo(mode: string): Promise<ConvexModeInfoResponse> {
+		return this.fetch(`/api/convexopt/${encodeURIComponent(mode)}/info`);
+	}
+
+	/**
+	 * Run convex optimization with CVXPY
+	 * Uses KL-divergence and smoothness constraints to optimize payout distributions
+	 */
+	async convexOptimize(request: Partial<ConvexOptimizeRequest> & { mode: string }): Promise<ConvexOptimizeResponse> {
+		return this.postJson('/api/convexopt/optimize', request);
+	}
+
+	/**
+	 * Validate convex optimization configuration without running
+	 */
+	async convexValidate(request: Partial<ConvexOptimizeRequest> & { mode: string }): Promise<{
+		valid: boolean;
+		errors: string[];
+	}> {
+		return this.postJson('/api/convexopt/validate', request);
 	}
 }
 

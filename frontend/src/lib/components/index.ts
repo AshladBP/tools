@@ -9,3 +9,4 @@ export { default as LGSPanel } from './LGSPanel.svelte';
 export { default as WelcomeModal } from './WelcomeModal.svelte';
 export { CrowdSimPanel } from './crowdsim';
 export { OptimizerPanel } from './optimizer';
+export { ConvexOptimizerPanel } from './convexopt';

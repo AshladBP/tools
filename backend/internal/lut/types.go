@@ -22,6 +22,7 @@ func round4(v float64) float64 {
 // Statistics contains comprehensive LUT analysis results.
 type Statistics struct {
 	Mode           string             `json:"mode"`
+	Cost           float64            `json:"cost"`            // Cost to trigger this mode (1.0 for base)
 	TotalOutcomes  int                `json:"total_outcomes"`
 	TotalWeight    uint64             `json:"total_weight"`
 	RTP            float64            `json:"rtp"`
@@ -38,6 +39,9 @@ type Statistics struct {
 	Distribution   []DistributionItem `json:"distribution"`
 	TopPayouts     []PayoutInfo       `json:"top_payouts"`
 	ZeroPayoutRate float64            `json:"zero_payout_rate"`
+	// Cost-adjusted metrics (for bonus modes with cost > 1)
+	BreakevenRate    float64 `json:"breakeven_rate"`    // P(payout >= cost)
+	CostAdjVolatility float64 `json:"cost_adj_volatility"` // StdDev / Cost
 }
 
 // PayoutBucket represents a range of payouts for histogram visualization.
@@ -96,8 +100,15 @@ func (a *Analyzer) Analyze(lut *stakergs.LookupTable) *Statistics {
 		return &Statistics{Mode: lut.Mode}
 	}
 
+	// Get cost (default to 1.0 for base mode)
+	cost := lut.Cost
+	if cost <= 0 {
+		cost = 1.0
+	}
+
 	stats := &Statistics{
 		Mode:          lut.Mode,
+		Cost:          cost,
 		TotalOutcomes: len(lut.Outcomes),
 		TotalWeight:   totalWeight,
 		RTP:           round4(lut.RTP()),
@@ -145,6 +156,23 @@ func (a *Analyzer) Analyze(lut *stakergs.LookupTable) *Statistics {
 		}
 	}
 	stats.ZeroPayoutRate = round4(float64(zeroWeight) / float64(totalWeight))
+
+	// Cost-adjusted metrics (for bonus modes with cost > 1)
+	// These are critical for understanding true volatility of paid features
+	costCents := uint(cost * 100)
+
+	// Breakeven rate: probability of payout >= cost
+	var breakevenWeight uint64
+	for _, o := range lut.Outcomes {
+		if o.Payout >= costCents {
+			breakevenWeight += o.Weight
+		}
+	}
+	stats.BreakevenRate = round4(float64(breakevenWeight) / float64(totalWeight))
+
+	// Cost-adjusted volatility: StdDev relative to cost
+	// This shows how much variance there is compared to what you paid
+	stats.CostAdjVolatility = round4(math.Sqrt(variance) / cost)
 
 	// Distribution (sorted by payout)
 	stats.Distribution = a.BuildDistribution(lut, totalWeight)

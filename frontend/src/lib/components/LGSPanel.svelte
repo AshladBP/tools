@@ -3,11 +3,43 @@
 	import { CURRENCIES, LANGUAGES, loadGameSettings, saveGameSettings, getCurrencyDisplay, openGame as openGameHelper } from '$lib/openGame';
 	import BatchSimModal from './BatchSimModal.svelte';
 
+	const LGS_HTTPS_URL = 'https://localhost:7755';
+
 	interface Props {
 		modes: ModeSummary[];
 	}
 
 	let { modes }: Props = $props();
+
+	// Certificate status
+	let certStatus = $state<'checking' | 'ok' | 'error'>('checking');
+	let certBannerDismissed = $state(false);
+
+	// Check if HTTPS server is accessible
+	async function checkCertificate(): Promise<boolean> {
+		try {
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), 5000);
+			await fetch(`${LGS_HTTPS_URL}/lgs/health`, {
+				method: 'GET',
+				signal: controller.signal
+			});
+			clearTimeout(timeout);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	function openLgsUrl() {
+		window.open(LGS_HTTPS_URL, '_blank');
+	}
+
+	async function recheckCertificate() {
+		certStatus = 'checking';
+		const ok = await checkCertificate();
+		certStatus = ok ? 'ok' : 'error';
+	}
 
 	let sessions = $state<LGSSessionSummary[]>([]);
 	let aggregate = $state<LGSAggregateStats | null>(null);
@@ -418,6 +450,12 @@
 		loadLoaderStatus();
 		connectWebSocket();
 
+		// Check certificate status
+		(async () => {
+			const ok = await checkCertificate();
+			certStatus = ok ? 'ok' : 'error';
+		})();
+
 		return () => {
 			if (ws) {
 				ws.close();
@@ -438,6 +476,46 @@
 </script>
 
 <div class="relative">
+	<!-- Certificate Warning Banner -->
+	{#if certStatus === 'error' && !certBannerDismissed}
+		<div class="mb-4 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-4">
+			<div class="w-10 h-10 rounded-lg bg-amber-500/20 flex items-center justify-center shrink-0">
+				<svg class="w-5 h-5 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+					<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+				</svg>
+			</div>
+			<div class="flex-1 min-w-0">
+				<h4 class="font-display text-sm text-amber-400 tracking-wider mb-1">HTTPS CERTIFICATE NOT TRUSTED</h4>
+				<p class="text-sm text-[var(--color-light)]/70 mb-3">
+					LGS requires HTTPS with a self-signed certificate. To use LGS features, open the link below in your browser and trust the certificate.
+				</p>
+				<div class="flex flex-wrap items-center gap-3">
+					<button
+						onclick={openLgsUrl}
+						class="px-4 py-2 rounded-lg bg-amber-500 text-[var(--color-void)] font-mono font-semibold text-sm hover:bg-amber-400 transition-colors flex items-center gap-2"
+					>
+						<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+							<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+						</svg>
+						OPEN {LGS_HTTPS_URL}
+					</button>
+					<button
+						onclick={recheckCertificate}
+						class="px-4 py-2 rounded-lg bg-[var(--color-slate)] text-[var(--color-light)] font-mono text-sm hover:bg-[var(--color-graphite)] transition-colors"
+					>
+						Recheck
+					</button>
+					<button
+						onclick={() => certBannerDismissed = true}
+						class="px-4 py-2 rounded-lg text-[var(--color-mist)] font-mono text-sm hover:text-[var(--color-light)] transition-colors"
+					>
+						Dismiss
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}
+
 	<!-- Loading Overlay -->
 	{#if !allBooksLoaded()}
 		<div class="absolute inset-0 z-10 backdrop-blur-sm bg-[var(--color-void)]/70 rounded-2xl flex items-center justify-center">
