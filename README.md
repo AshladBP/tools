@@ -4,130 +4,98 @@ A toolkit for analyzing game lookup tables (LUTs) with a Go backend and SvelteKi
 
 Powered by Stake Engine. Respect whole Stake Engine team ❤️
 
-## Prerequisites
+---
 
-**You must install these dependencies first** - they are required to run the backend and frontend:
+## Launcher Setup (Recommended)
+
+**One-click solution** - download, run, done. No dependencies required.
+
+### 1. Download
+
+Get the launcher for your platform from [Releases](https://github.com/mnemoo/tools/releases):
+
+| Platform | File |
+|----------|------|
+| macOS Apple Silicon | `mtools-launcher-darwin-arm64.app.zip` |
+| Windows x64 | `mtools-launcher-windows-amd64.exe` |
+| Linux x64 | `mtools-launcher-linux-amd64` |
+
+### 2. Run
+
+- **macOS**: Unzip and open the `.app`
+- **Windows**: Run the `.exe`
+- **Linux**: `chmod +x mtools-launcher-linux-amd64 && ./mtools-launcher-linux-amd64`
+
+### 3. Select library
+
+Use the dir picker to select your library and click **Start**.
+
+> The launcher bundles everything (backend + frontend) - no Go, Node.js, or other dependencies needed.
+
+---
+
+## Manual Setup
+
+For developers who want to run services separately or modify the code.
+
+### Prerequisites
 
 | Dependency | Version | Download |
 |------------|---------|----------|
-| **Go** | 1.24+ | [go.dev/dl](https://go.dev/dl/) |
+| **Go** | 1.23+ | [go.dev/dl](https://go.dev/dl/) |
 | **Node.js** | 22+ | [nodejs.org](https://nodejs.org/) |
-| **pnpm** | latest | `npm install -g pnpm` |
+| **pnpm** | 9+ | `npm install -g pnpm` |
 
 <details>
-<summary><b>macOS installation</b></summary>
+<summary><b>macOS</b></summary>
 
 ```bash
-# Install Homebrew if not installed
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-# Install dependencies
 brew install go node
 npm install -g pnpm
 ```
 </details>
 
 <details>
-<summary><b>Windows installation</b></summary>
+<summary><b>Windows</b></summary>
 
-1. Download and install [Go](https://go.dev/dl/)
-2. Download and install [Node.js](https://nodejs.org/)
-3. Open terminal and run: `npm install -g pnpm`
+1. Install [Go](https://go.dev/dl/)
+2. Install [Node.js](https://nodejs.org/)
+3. Run: `npm install -g pnpm`
 </details>
 
 <details>
-<summary><b>Linux (Ubuntu/Debian) installation</b></summary>
+<summary><b>Linux (Ubuntu/Debian)</b></summary>
 
 ```bash
-# Install Go
 sudo apt update && sudo apt install golang-go
-
-# Install Node.js (via NodeSource)
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs
-
-# Install pnpm
 npm install -g pnpm
 ```
 </details>
 
----
-
-## Quick Start
-
-### Option 1: Use the Launcher (Recommended)
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/mnemoo/tools.git
-   cd tools
-   ```
-
-2. Run the launcher:
-   ```bash
-   cd launcher
-   go run .
-   ```
-
-The Launcher GUI will:
-- Check and show missing dependencies
-- Let you select the `index.json` file
-- Start/stop backend and frontend with one click
-- Open the app in your browser
-
-### Option 2: Download Pre-built Launcher
-
-If you already have Go, Node.js, and pnpm installed, download the launcher binary from [Releases](https://github.com/mnemoo/tools/releases):
-
-- `mtools-launcher-darwin-arm64` - macOS Apple Silicon
-- `mtools-launcher-linux-amd64` - Linux x64
-- `mtools-launcher-linux-arm64` - Linux ARM64
-- `mtools-launcher-windows-amd64.exe` - Windows x64
-- `mtools-launcher-windows-arm64.exe` - Windows ARM64
-
-> **Note:** The launcher is just a GUI - it still requires Go and Node.js to compile and run the backend/frontend. You also need to clone/download the repository and place the launcher binary in the root folder.
-
----
-
-## Manual Setup
-
-<details>
-<summary>Run backend and frontend separately</summary>
-
-### Start Backend
+### Run
 
 ```bash
+# Backend
 cd backend
-go run ./cmd -index /path/to/your/index.json
-```
+go run ./cmd -index /path/to/index.json
+# Runs on http://localhost:7754
 
-Backend runs on:
-- HTTP: http://localhost:7754
-- HTTPS: https://localhost:7755
-
-### Start Frontend
-
-```bash
+# Frontend (separate terminal)
 cd frontend
-pnpm install
-pnpm dev --port 7750
+pnpm install && pnpm dev --port 7750
+# Runs on http://localhost:7750
 ```
 
-Frontend runs on http://localhost:7750
-
-</details>
+---
 
 ## Project Structure
 
 ```
 mtools/
-├── backend/          # Go API server
-├── frontend/         # SvelteKit web application
-├── launcher/         # Desktop launcher (Fyne GUI)
-└── stakergs/         # Shared Go library
+├── backend/     # Go API server
+├── frontend/    # SvelteKit web app
+├── launcher/    # Wails desktop app
+└── stakergs/    # Shared Go library
 ```
-
-## Documentation
-
-- [Backend README](./backend/README.md)
-- [Frontend README](./frontend/README.md)
