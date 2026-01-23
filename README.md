@@ -22,9 +22,22 @@ Get the launcher for your platform from [Releases](https://github.com/mnemoo/too
 
 ### 2. Run
 
-- **macOS**: Unzip and open the `.app`
 - **Windows**: Run the `.exe`
 - **Linux**: `chmod +x mtools-launcher-linux-amd64 && ./mtools-launcher-linux-amd64`
+- **macOS**: Unzip, then remove quarantine flag:
+  ```bash
+  xattr -cr mtools-launcher.app
+  ```
+  Then open the `.app` as usual.
+
+### ⚠️ macOS Users
+The app is not signed with an Apple Developer certificate. After downloading, unzip & run in terminal:
+`xattr -cr mtools-launcher.app`
+
+One-liner: `unzip mtools-launcher-darwin-arm64.app.zip && xattr -cr mtools-launcher.app && open mtools-launcher.app`
+
+Then open as usual.
+
 
 ### 3. Select library
 
@@ -78,12 +91,10 @@ npm install -g pnpm
 
 ```bash
 # Backend
-# Note: the library directory you provide must contain a "publish_files" directory
-# with all required published files (index.json, CSV files, .jsonl.zstd files).
+# Note: the library directory must contain "publish_files" with index.json, CSV, .jsonl.zstd files
 cd backend
 go run ./cmd -library /path/to/library
 # Runs on http://localhost:7754
-```
 
 # Frontend (separate terminal)
 cd frontend
