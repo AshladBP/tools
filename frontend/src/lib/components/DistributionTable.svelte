@@ -39,16 +39,6 @@
 		return `${bucket.range_start}-${bucket.range_end}`;
 	}
 
-	// Set first bucket as expanded by default (wincap)
-	$effect(() => {
-		const sorted = sortedBuckets();
-		if (sorted.length > 0 && expandedBuckets.length === 0) {
-			const key = getBucketKey(sorted[0]);
-			expandedBuckets = [key];
-			loadBucketData(sorted[0], 0);
-		}
-	});
-
 	// Reset when mode changes
 	$effect(() => {
 		// Track mode to reset state when it changes
