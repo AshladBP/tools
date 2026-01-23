@@ -78,9 +78,12 @@ npm install -g pnpm
 
 ```bash
 # Backend
+# Note: the library directory you provide must contain a "publish_files" directory
+# with all required published files (index.json, CSV files, .jsonl.zstd files).
 cd backend
-go run ./cmd -index /path/to/index.json
+go run ./cmd -library /path/to/library
 # Runs on http://localhost:7754
+```
 
 # Frontend (separate terminal)
 cd frontend

@@ -276,14 +276,19 @@
 		}
 
 		const cost = modeInfo!.cost;
-		if (inputFormat === 'absolute') {
-			// Convert absolute -> normalized (divide by cost)
-			buckets = buckets.map(b => ({ ...b, min_payout: +(b.min_payout / cost), max_payout: +(b.max_payout / cost) }));
-			inputFormat = 'normalized';
-		} else {
+		// Swap based on the current ABS/NORM display toggle (displayMode).
+		// If currently showing normalized values, convert them to absolute (multiply by cost),
+		// otherwise convert absolute -> normalized (divide by cost).
+		if (displayMode === 'norm') {
 			// Convert normalized -> absolute (multiply by cost)
 			buckets = buckets.map(b => ({ ...b, min_payout: +(b.min_payout * cost), max_payout: +(b.max_payout * cost) }));
+			displayMode = 'abs';
 			inputFormat = 'absolute';
+		} else {
+			// Convert absolute -> normalized (divide by cost)
+			buckets = buckets.map(b => ({ ...b, min_payout: +(b.min_payout / cost), max_payout: +(b.max_payout / cost) }));
+			displayMode = 'norm';
+			inputFormat = 'normalized';
 		}
 		// Clear any prior errors
 		error = null;
@@ -842,60 +847,7 @@
 		>MANUAL</button>
 	</div>
 
-	<!-- Bonus Mode / Units Banner -->
-	{#if modeInfo?.is_bonus_mode}
-		<div class="px-4 py-3 rounded-xl bg-violet-500/10 border border-violet-500/30">
-			<div class="flex items-center gap-2 mb-2">
-				<svg class="w-4 h-4 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-				</svg>
-				<span class="text-sm font-mono text-violet-400">BONUS MODE</span>
-				<span class="px-2 py-0.5 text-xs font-mono bg-violet-500/20 text-violet-300 rounded">Cost: {modeInfo.cost}x</span>
-
-				<!-- Input format selector + convert button -->
-				<span class="ml-auto flex items-center gap-2">
-					<span class="text-xs font-mono text-violet-300/80">Bucket ranges:</span>
-					<select
-						bind:value={inputFormat}
-						class="bg-[var(--color-graphite)] border border-white/10 rounded px-2 py-1 text-xs font-mono text-[var(--color-light)] focus:outline-none"
-						aria-label="Bucket range units"
-						title="Choose how you want to type bucket Min/Max values"
-					>
-						<option value="absolute">Absolute (x)</option>
-						<option value="normalized">Normalized (x / cost)</option>
-					</select>
-
-					<button
-						class="p-1 rounded text-xs bg-[var(--color-slate)]/20 text-[var(--color-mist)] hover:bg-[var(--color-slate)]/30 transition-colors"
-						onclick={convertBucketsFormat}
-						title="Convert all current bucket Min/Max values to the other unit using the mode cost"
-						aria-label="Convert bucket values between absolute and normalized"
-					>
-						<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-							<path stroke-linecap="round" stroke-linejoin="round" d="M7 7h10M7 7l3 3M7 7l3-3M17 17H7M17 17l-3-3M17 17l-3 3" />
-						</svg>
-					</button>
-				</span>
-			</div>
-
-			<div class="text-xs font-mono text-violet-200/70 space-y-2">
-				<p>
-					In bonus modes, the optimizer uses <span class="text-violet-300">normalized</span> payouts where
-					<span class="text-emerald-400">1.0x</span> means "one mode cost".
-					If you select <span class="text-violet-300">Absolute</span> ranges, they are converted automatically before optimizing.
-				</p>
-
-				<div class="space-y-1">
-					<p><span class="text-violet-300">Absolute</span>: type the multipliers exactly as shown in your distribution/payout table (e.g. 500x = 500x).</p>
-					<p><span class="text-violet-300">Normalized</span>: type optimizer units (absolute ÷ cost).</p>
-				</div>
-
-				<p class="text-violet-200/60">
-					The swap button converts the current bucket values to quickly view and edit buckets in the other unit and switches the selected range unit (Absolute ↔ Normalized) so everything stays consistent.
-				</p>
-			</div>
-		</div>
-	{/if}
+	<!-- NOTE: Top explanatory bonus-mode banner removed per UX request. -->
 
 	<!-- ═══════ PRESETS MODE ═══════ -->
 	{#if uiMode === 'presets'}
@@ -1174,17 +1126,30 @@
 					<div class="flex gap-0.5 p-0.5 bg-[var(--color-slate)]/30 rounded">
 						<button
 							class="px-2 py-1 text-xs font-mono rounded transition-all
-								   {displayMode === 'abs' ? 'bg-[var(--color-violet)]/20 text-[var(--color-violet)]' : 'text-[var(--color-mist)]/70 hover:text-[var(--color-mist)]'}"
+								{displayMode === 'abs' ? 'bg-[var(--color-violet)]/20 text-[var(--color-violet)]' : 'text-[var(--color-mist)]/70 hover:text-[var(--color-mist)]'}"
 							onclick={() => displayMode = 'abs'}
 							title="Absolute values (multiplied by cost)"
 						>ABS</button>
 						<button
 							class="px-2 py-1 text-xs font-mono rounded transition-all
-								   {displayMode === 'norm' ? 'bg-[var(--color-emerald)]/20 text-[var(--color-emerald)]' : 'text-[var(--color-mist)]/70 hover:text-[var(--color-mist)]'}"
+								{displayMode === 'norm' ? 'bg-[var(--color-emerald)]/20 text-[var(--color-emerald)]' : 'text-[var(--color-mist)]/70 hover:text-[var(--color-mist)]'}"
 							onclick={() => displayMode = 'norm'}
 							title="Normalized values (divided by cost)"
 						>NORM</button>
 					</div>
+
+					<!-- Convert/Switch button moved from the removed banner -->
+					<button
+						class="p-1 rounded text-xs bg-[var(--color-slate)]/20 text-[var(--color-mist)] hover:bg-[var(--color-slate)]/30 transition-colors"
+						onclick={convertBucketsFormat}
+						title="Convert current bucket Min/Max values between absolute and normalized units"
+						aria-label="Convert bucket values between absolute and normalized"
+					>
+						<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+							<path stroke-linecap="round" stroke-linejoin="round" d="M7 7h10M7 7l3 3M7 7l3-3M17 17H7M17 17l-3-3M17 17l-3 3" />
+						</svg>
+					</button>
+
 					<span class="px-2 py-0.5 text-xs font-mono bg-[var(--color-cyan)]/20 text-[var(--color-cyan)] rounded">NEW</span>
 				</div>
 			{/if}
@@ -1254,18 +1219,18 @@
 			</div>
 		{/if}
 
-		<!-- Bonus Mode Info (simplified) -->
-		{#if modeInfo?.is_bonus_mode}
-			<div class="px-3 py-2 rounded-lg bg-violet-500/10 border border-violet-500/20">
-				<div class="flex items-center gap-2 text-xs font-mono">
-					<span class="text-violet-400">BONUS MODE</span>
-					<span class="px-1.5 py-0.5 bg-violet-500/20 text-violet-300 rounded">Cost: {modeInfo.cost}x</span>
-					<span class="text-violet-200/70 ml-2">
-						{displayMode === 'abs' ? 'Showing absolute values' : 'Showing normalized values'}
-					</span>
-				</div>
-			</div>
-		{/if}
+				<!-- Bonus Mode Info (simplified) -->
+				{#if modeInfo?.is_bonus_mode}
+					<div class="px-3 py-2 rounded-lg bg-violet-500/10 border border-violet-500/20">
+						<div class="flex items-center gap-2 text-xs font-mono">
+							<span class="text-violet-400">BONUS MODE</span>
+							<span class="px-1.5 py-0.5 bg-violet-500/20 text-violet-300 rounded">Cost: {modeInfo.cost}x</span>
+							<span class="text-violet-200/70 ml-2">
+								{displayMode === 'abs' ? 'Showing absolute values' : 'Showing normalized values'}
+							</span>
+						</div>
+					</div>
+				{/if}
 
 		<!-- Profile Selector Panel -->
 		{#if showProfiles && profileConfigs.length > 0}
