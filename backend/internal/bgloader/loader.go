@@ -56,6 +56,7 @@ type BackgroundLoader struct {
 	hub          *ws.Hub
 	baseDir      string
 	priority     atomic.Int32 // Current priority level
+	started      atomic.Bool  // Whether loading has been started
 	modeStatuses map[string]*ModeStatus
 	mu           sync.RWMutex
 	stopCh       chan struct{}
@@ -92,6 +93,12 @@ func NewBackgroundLoader(loader *lut.Loader, hub *ws.Hub) *BackgroundLoader {
 
 // Start begins background loading of all modes.
 func (bl *BackgroundLoader) Start() {
+	// Only start once
+	if bl.started.Swap(true) {
+		log.Println("BackgroundLoader: Already started")
+		return
+	}
+
 	index := bl.loader.GetIndex()
 	if index == nil {
 		log.Println("BackgroundLoader: No index loaded")
@@ -114,6 +121,11 @@ func (bl *BackgroundLoader) Start() {
 	// Start loading goroutine
 	bl.wg.Add(1)
 	go bl.loadAllModes(index.Modes)
+}
+
+// IsStarted returns whether loading has been started.
+func (bl *BackgroundLoader) IsStarted() bool {
+	return bl.started.Load()
 }
 
 // Stop stops all background loading.

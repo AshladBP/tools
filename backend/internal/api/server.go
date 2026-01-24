@@ -149,6 +149,7 @@ func (s *Server) Start() error {
 
 	// Background loader API
 	mux.HandleFunc("GET /api/loader/status", s.handleLoaderStatus)
+	mux.HandleFunc("POST /api/loader/start", s.handleLoaderStart)
 	mux.HandleFunc("POST /api/loader/boost", s.handleLoaderBoost)
 	mux.HandleFunc("DELETE /api/loader/boost", s.handleLoaderUnboost)
 	mux.HandleFunc("GET /api/loader/priority", s.handleLoaderPriority)
@@ -253,6 +254,7 @@ func (s *Server) GetHandler() http.Handler {
 
 	// Background loader API
 	mux.HandleFunc("GET /api/loader/status", s.handleLoaderStatus)
+	mux.HandleFunc("POST /api/loader/start", s.handleLoaderStart)
 	mux.HandleFunc("POST /api/loader/boost", s.handleLoaderBoost)
 	mux.HandleFunc("DELETE /api/loader/boost", s.handleLoaderUnboost)
 	mux.HandleFunc("GET /api/loader/priority", s.handleLoaderPriority)
@@ -774,11 +776,37 @@ func (s *Server) handleLoaderStatus(w http.ResponseWriter, r *http.Request) {
 
 	status := s.bgLoader.GetStatus()
 	priority := s.bgLoader.GetPriority().String()
+	started := s.bgLoader.IsStarted()
 
 	common.WriteSuccess(w, map[string]interface{}{
-		"priority":  priority,
-		"modes":     status,
+		"priority":   priority,
+		"started":    started,
+		"modes":      status,
 		"ws_clients": s.wsHub.ClientCount(),
+	})
+}
+
+// handleLoaderStart starts loading event books if not already started.
+func (s *Server) handleLoaderStart(w http.ResponseWriter, r *http.Request) {
+	if s.bgLoader == nil {
+		common.WriteError(w, http.StatusServiceUnavailable, "background loader not initialized")
+		return
+	}
+
+	if s.bgLoader.IsStarted() {
+		common.WriteSuccess(w, map[string]string{
+			"status":  "already_started",
+			"message": "Event books loading was already started",
+		})
+		return
+	}
+
+	s.bgLoader.Start()
+	log.Println("Background loader started via API")
+
+	common.WriteSuccess(w, map[string]string{
+		"status":  "started",
+		"message": "Event books loading started",
 	})
 }
 

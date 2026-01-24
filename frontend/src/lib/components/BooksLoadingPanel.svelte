@@ -13,9 +13,11 @@
 	// State
 	let modes = $state<Record<string, LoaderModeStatus>>({});
 	let priority = $state<'low' | 'high'>('low');
+	let started = $state(true); // Assume started by default, will be updated from API
 	let wsConnected = $state(false);
 	let ws: WebSocket | null = null;
 	let isBoostLoading = $state(false);
+	let isStartLoading = $state(false);
 
 	// Derived state
 	let allComplete = $derived(
@@ -176,12 +178,28 @@
 		}
 	}
 
+	// Start loading books
+	async function startLoading() {
+		isStartLoading = true;
+		try {
+			await api.loaderStart();
+			started = true;
+			// Fetch updated status
+			await fetchStatus();
+		} catch (e) {
+			console.error('Failed to start loader:', e);
+		} finally {
+			isStartLoading = false;
+		}
+	}
+
 	// Fetch initial status
 	async function fetchStatus() {
 		try {
 			const status = await api.loaderStatus();
 			modes = status.modes;
 			priority = status.priority;
+			started = (status as any).started ?? true; // Handle new 'started' field
 		} catch (e) {
 			console.error('Failed to fetch loader status:', e);
 		}
@@ -217,7 +235,45 @@
 		{/if}
 	</div>
 
-	{#if totalModes === 0}
+	{#if !started && totalModes === 0}
+		<!-- Not Started State -->
+		<div class="p-4 rounded-xl bg-gradient-to-br from-amber-500/10 to-orange-600/5 border border-amber-500/20">
+			<div class="flex items-center gap-3">
+				<div class="w-12 h-12 rounded-xl bg-amber-500/20 flex items-center justify-center">
+					<svg class="w-6 h-6 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+					</svg>
+				</div>
+				<div>
+					<div class="text-lg font-semibold text-white">Event Books Not Loaded</div>
+					<div class="text-sm text-amber-400/80">Loading disabled to prevent CPU usage</div>
+				</div>
+			</div>
+
+			<div class="mt-4 p-3 rounded-lg bg-slate-800/50 text-xs text-slate-400">
+				<p>Event books contain detailed game event data (ZSTD compressed). Loading them uses significant CPU.</p>
+				<p class="mt-1">Click the button below to start loading when you need event data.</p>
+			</div>
+
+			<button
+				class="mt-4 w-full px-4 py-2.5 text-sm font-medium rounded-lg transition-all bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/30 disabled:opacity-50"
+				onclick={startLoading}
+				disabled={isStartLoading}
+			>
+				{#if isStartLoading}
+					<span class="flex items-center justify-center gap-2">
+						<svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+							<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+							<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+						</svg>
+						Starting...
+					</span>
+				{:else}
+					Load Event Books
+				{/if}
+			</button>
+		</div>
+	{:else if totalModes === 0}
 		<div class="py-6 text-center text-slate-500 text-sm">
 			No event books configured
 		</div>

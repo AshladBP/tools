@@ -292,6 +292,10 @@ class LutApiClient {
 		return this.fetch('/api/loader/status');
 	}
 
+	async loaderStart(): Promise<{ status: string; message: string }> {
+		return this.post('/api/loader/start');
+	}
+
 	async loaderPriority(): Promise<LoaderPriorityResponse> {
 		return this.fetch('/api/loader/priority');
 	}

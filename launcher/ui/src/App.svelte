@@ -306,6 +306,14 @@
         <button class="secondary" onclick={selectFolder} disabled={selectingFolder}>
           {selectingFolder ? '...' : '📂 Change Dir'}
         </button>
+        <label class="autoload-toggle">
+          <input
+            type="checkbox"
+            bind:checked={config.autoLoadBooks}
+            onchange={saveConfig}
+          />
+          <span>Auto-load books</span>
+        </label>
       {:else if status.backend === 'running' && status.frontend === 'running'}
         <button class="danger" onclick={stopAll} disabled={loading}>
           ⏹️ Stop All
@@ -398,6 +406,14 @@
         <div class="setting-group">
           <label for="frontend-port">Frontend Port</label>
           <input id="frontend-port" type="text" bind:value={config.frontendPort} placeholder="7750" />
+        </div>
+
+        <div class="setting-group">
+          <label class="checkbox-setting">
+            <input type="checkbox" bind:checked={config.autoLoadBooks} />
+            <span>Auto-load event books at startup</span>
+          </label>
+          <p class="setting-hint">When disabled, books won't load automatically to prevent high CPU usage. You can manually start loading from the frontend.</p>
         </div>
 
         <div class="setting-group">
@@ -716,7 +732,8 @@
   }
 
   /* Watcher toggle */
-  .watcher-toggle {
+  .watcher-toggle,
+  .autoload-toggle {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -728,14 +745,38 @@
     user-select: none;
   }
 
-  .watcher-toggle input {
+  .watcher-toggle input,
+  .autoload-toggle input {
     width: 16px;
     height: 16px;
     cursor: pointer;
   }
 
-  .watcher-toggle:hover {
+  .watcher-toggle:hover,
+  .autoload-toggle:hover {
     background: var(--bg-hover);
+  }
+
+  /* Checkbox setting in settings panel */
+  .checkbox-setting {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+
+  .checkbox-setting input {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+  }
+
+  .setting-hint {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
   }
 
   /* Port badges */

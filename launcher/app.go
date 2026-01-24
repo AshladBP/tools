@@ -41,8 +41,9 @@ type Status struct {
 }
 
 type Config struct {
-	LibraryPath  string `json:"libraryPath"`
-	FrontendPort string `json:"frontendPort"`
+	LibraryPath   string `json:"libraryPath"`
+	FrontendPort  string `json:"frontendPort"`
+	AutoLoadBooks bool   `json:"autoLoadBooks"`
 }
 
 // WatcherStatus represents the backend watcher status
@@ -88,7 +89,8 @@ const (
 func NewApp() *App {
 	return &App{
 		config: Config{
-			FrontendPort: DefaultFrontendPort,
+			FrontendPort:  DefaultFrontendPort,
+			AutoLoadBooks: false, // Default: don't auto-load books to prevent high CPU usage
 		},
 		backendLogs:  make([]string, 0, MaxLogEntries),
 		frontendLogs: make([]string, 0, MaxLogEntries),
@@ -256,11 +258,53 @@ func (a *App) isValidProjectRoot(dir string) bool {
 }
 
 func (a *App) loadConfig() {
-	// Try to find default library in testdata
+	// TODO: Enable config persistence when needed
+	// // Try to load saved config first
+	// configPath := a.getConfigPath()
+	// if data, err := os.ReadFile(configPath); err == nil {
+	// 	var savedConfig Config
+	// 	if err := json.Unmarshal(data, &savedConfig); err == nil {
+	// 		a.config = savedConfig
+	// 		// Ensure defaults for new fields
+	// 		if a.config.FrontendPort == "" {
+	// 			a.config.FrontendPort = DefaultFrontendPort
+	// 		}
+	// 		return
+	// 	}
+	// }
+
+	// Fallback: Try to find default library in testdata
 	defaultLibrary := filepath.Join(a.projectRoot, "backend", "testdata", "library")
 	if _, err := os.Stat(defaultLibrary); err == nil {
 		a.config.LibraryPath = defaultLibrary
 	}
+}
+
+func (a *App) getConfigPath() string {
+	if isProduction {
+		return filepath.Join(a.dataDir, "config.json")
+	}
+	return filepath.Join(a.projectRoot, "launcher", "config.json")
+}
+
+func (a *App) saveConfigToFile() error {
+	// TODO: Enable config persistence when needed
+	return nil
+
+	// configPath := a.getConfigPath()
+	//
+	// // Ensure directory exists
+	// dir := filepath.Dir(configPath)
+	// if err := os.MkdirAll(dir, 0755); err != nil {
+	// 	return err
+	// }
+	//
+	// data, err := json.MarshalIndent(a.config, "", "  ")
+	// if err != nil {
+	// 	return err
+	// }
+	//
+	// return os.WriteFile(configPath, data, 0644)
 }
 
 // GetStatus returns current status of all processes
@@ -309,12 +353,14 @@ func (a *App) GetConfig() Config {
 	return a.config
 }
 
-// SetConfig updates configuration
+// SetConfig updates configuration and saves to file
 func (a *App) SetConfig(config Config) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.config = config
-	return nil
+	a.mu.Unlock()
+
+	// Persist to file
+	return a.saveConfigToFile()
 }
 
 // SelectLibraryFolder opens native folder picker
@@ -360,21 +406,28 @@ func (a *App) StartBackend() error {
 
 	var cmd *exec.Cmd
 
+	// Build args list
+	args := []string{"-library", a.config.LibraryPath}
+	if !a.config.AutoLoadBooks {
+		args = append(args, "-no-autoload-books")
+	}
+
 	if isProduction {
 		// Production: use extracted binary
-		cmd = exec.Command(a.backendPath,
-			"-library", a.config.LibraryPath,
-		)
+		cmd = exec.Command(a.backendPath, args...)
 		cmd.Dir = a.dataDir // Ensure certs are created in app data dir
 		a.emitLog("backend", "Starting backend (production mode)...")
 	} else {
 		// Development: use go run
 		backendDir := filepath.Join(a.projectRoot, "backend")
-		cmd = exec.Command("go", "run", "./cmd",
-			"-library", a.config.LibraryPath,
-		)
+		goArgs := append([]string{"run", "./cmd"}, args...)
+		cmd = exec.Command("go", goArgs...)
 		cmd.Dir = backendDir
 		a.emitLog("backend", "Starting backend (development mode)...")
+	}
+
+	if !a.config.AutoLoadBooks {
+		a.emitLog("backend", "Auto-load books disabled (use frontend to start loading)")
 	}
 
 	setupProcessGroup(cmd)

@@ -102,6 +102,7 @@ func main() {
 	httpsPort := flag.Int("https-port", 7755, "HTTPS port (0 to disable)")
 	convexURL := flag.String("convex-url", "", "URL of the Convex Optimizer Python service (e.g., http://localhost:7756)")
 	watch := flag.Bool("watch", false, "Enable auto-reload when CSV lookup tables change")
+	noAutoloadBooks := flag.Bool("no-autoload-books", false, "Disable automatic loading of event books at startup")
 	flag.Parse()
 
 	// Check environment variable for convex URL if not provided via flag
@@ -142,8 +143,12 @@ func main() {
 
 	// Create background loader
 	bgLoader := bgloader.NewBackgroundLoader(loader, hub)
-	bgLoader.Start()
-	log.Println("Background loader started (low priority mode)")
+	if !*noAutoloadBooks {
+		bgLoader.Start()
+		log.Println("Background loader started (low priority mode)")
+	} else {
+		log.Println("Background loader created but NOT started (use API to start)")
+	}
 
 	// Create CSV watcher for auto-reload on file changes (optional)
 	var csvWatcher *watcher.FileWatcher
