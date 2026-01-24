@@ -21,6 +21,10 @@
 	let certCheckInterval: ReturnType<typeof setInterval> | null = null;
 	const CERT_CHECK_INTERVAL = 30000; // Check every 30 seconds
 
+// Environment-derived URLs (do not export)
+const API_BASE = (import.meta.env?.VITE_API_BASE_URL as string) ?? 'http://localhost:7754';
+const LGS_URL = (import.meta.env?.VITE_LGS_URL as string) ?? 'https://localhost:7755';
+
 	let indexInfo = $state<IndexInfo | null>(null);
 	let selectedMode = $state<string | null>(null);
 	let stats = $state<Statistics | null>(null);
@@ -325,7 +329,31 @@
 						<h2 class="font-display text-2xl text-[var(--color-coral)] tracking-wider mb-3">CONNECTION FAILED</h2>
 						<p class="text-[var(--color-mist)] mb-6">{error}</p>
 						<div class="inline-block px-4 py-2 rounded-lg data-cell">
-							<code class="font-mono text-sm text-[var(--color-light)]">localhost:7755</code>
+							<code class="font-mono text-sm text-[var(--color-light)]">{new URL(LGS_URL).host}</code>
+						</div>
+
+						<p class="text-xs text-[var(--color-mist)] mt-3">
+							This commonly happens when the local API and/or LGS/RGS uses a self-signed TLS certificate.
+							Open the URLs in a new tab and accept the browser warning (Advanced → Proceed) to trust it,
+							then reload this page. The browser will show a warning because the certificate is not trusted by default.
+						</p>
+
+						<div class="flex items-center justify-center gap-3 mt-4">
+							<button
+								class="px-3 py-1.5 rounded-lg data-cell text-xs font-mono text-[var(--color-gold)] hover:bg-[var(--color-gold)]/10 transition-colors"
+								onclick={() => window.open(LGS_URL, '_blank')}
+								title="Open LGS in a new tab"
+							>
+								OPEN LGS IN NEW TAB
+							</button>
+
+							<button
+								class="px-3 py-1.5 rounded-lg data-cell text-xs font-mono hover:bg-[var(--color-slate)]/10 transition-colors"
+								onclick={() => window.open(API_BASE, '_blank')}
+								title="Open API base in a new tab"
+							>
+								OPEN API BASE
+							</button>
 						</div>
 					</div>
 				</div>

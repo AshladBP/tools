@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { api } from '$lib/api/client';
+	import { api, API_BASE } from '$lib/api/client';
 	import { onMount, onDestroy } from 'svelte';
 	import type { WSOptimizerProgress, WSOptimizerMessage, ModeAnalysis, GenerateConfigsAnalysis, VoidedBucketInfo, VoidedOutcomeInfo } from '$lib/api/types';
 
@@ -457,8 +457,10 @@
 			ws = null;
 		}
 
-		const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-		const wsUrl = `${protocol}//${window.location.hostname}:7754/api/optimizer/${encodeURIComponent(mode)}/optimize-stream`;
+		// Build WS URL from configured API base so HTTPS -> WSS mapping is correct
+		const base = new URL(API_BASE);
+		const wsProtocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
+		const wsUrl = `${wsProtocol}//${base.host}/api/optimizer/${encodeURIComponent(mode)}/optimize-stream`;
 
 		ws = new WebSocket(wsUrl);
 
@@ -705,7 +707,7 @@
 			const requestRtp = targetRtp;
 
 			try {
-				const res = await fetch(`http://localhost:7754/api/optimizer/${encodeURIComponent(requestMode)}/generate-configs?target_rtp=${requestRtp}`);
+				const res = await fetch(`${API_BASE}/api/optimizer/${encodeURIComponent(requestMode)}/generate-configs?target_rtp=${requestRtp}`);
 				const data = await res.json();
 
 				// Check if mode/rtp changed during the request (stale response)
@@ -786,7 +788,7 @@
 		loadingProfiles = true;
 		error = null;
 		try {
-			const res = await fetch(`http://localhost:7754/api/optimizer/${encodeURIComponent(mode)}/generate-configs?target_rtp=${targetRtp}`);
+			const res = await fetch(`${API_BASE}/api/optimizer/${encodeURIComponent(mode)}/generate-configs?target_rtp=${targetRtp}`);
 			const data = await res.json();
 			if (data.success && data.data?.configs) {
 				profileConfigs = data.data.configs;

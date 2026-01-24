@@ -17,22 +17,23 @@ import (
 	"lutexplorer/internal/watcher"
 	"lutexplorer/internal/ws"
 
-	"github.com/rs/cors"
 	"stakergs"
+
+	"github.com/rs/cors"
 )
 
 // Server is the HTTP API server.
 type Server struct {
-	loader             *lut.Loader
-	addr               string
-	lgsHandlers        *lgs.Handlers
-	lgsSessions        *lgs.SessionManager
-	crowdsimHandlers   *crowdsim.Handlers
-	optimizerHandlers  *optimizer.Handlers
-	convexoptHandlers  *convexopt.Handlers
-	wsHub              *ws.Hub
-	bgLoader           *bgloader.BackgroundLoader
-	csvWatcher         *watcher.FileWatcher
+	loader            *lut.Loader
+	addr              string
+	lgsHandlers       *lgs.Handlers
+	lgsSessions       *lgs.SessionManager
+	crowdsimHandlers  *crowdsim.Handlers
+	optimizerHandlers *optimizer.Handlers
+	convexoptHandlers *convexopt.Handlers
+	wsHub             *ws.Hub
+	bgLoader          *bgloader.BackgroundLoader
+	csvWatcher        *watcher.FileWatcher
 }
 
 // NewServer creates a new API server.
@@ -267,23 +268,31 @@ func (s *Server) GetHandler() http.Handler {
 
 	// CORS middleware
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"*"},
+		AllowedOrigins: []string{
+			"https://mnemoo-tools.ashlad.dev",
+			"https://www.mnemoo-tools.ashlad.dev",
+			"http://localhost:5173",
+			"https://localhost:5173",
+		},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Content-Type", "Authorization"},
 		AllowCredentials: true,
 	})
 
-	// Logging middleware
-	loggingHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/ws" && r.URL.Path != "/api/loader/status" {
-			log.Printf("[HTTP] %s %s", r.Method, r.URL.Path)
+	corsHandler := c.Handler(mux)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Private-Network") == "true" {
+			w.Header().Set("Access-Control-Allow-Private-Network", "true")
 		}
-		c.Handler(mux).ServeHTTP(w, r)
+		if r.URL.Path != "/ws" && r.URL.Path != "/api/loader/status" {
+			log.Printf("[HTTPS] %s %s", r.Method, r.URL.Path)
+		}
+		corsHandler.ServeHTTP(w, r)
 	})
 
-	return loggingHandler
+	return handler
 }
-
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	common.WriteSuccess(w, map[string]string{"status": "ok"})

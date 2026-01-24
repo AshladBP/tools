@@ -36,13 +36,13 @@ import type {
 	GenerateConfigsAnalysis
 } from './types';
 
-const DEFAULT_BASE_URL = 'http://localhost:7754';
-const DEFAULT_LGS_URL = 'http://localhost:7754';
+export const API_BASE = (import.meta.env?.VITE_API_BASE_URL as string) ?? 'http://localhost:7754';
+const DEFAULT_LGS_URL = API_BASE;
 
 class LutApiClient {
 	private baseUrl: string;
 
-	constructor(baseUrl: string = DEFAULT_BASE_URL) {
+	constructor(baseUrl: string = API_BASE) {
 		this.baseUrl = baseUrl;
 	}
 
